@@ -1,0 +1,37 @@
+{
+  "name": "@stack/api",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "imports": {
+    "#factory": "./src/factory.ts",
+    "#errors": "./src/types/errors.ts",
+    "#environment": "./src/types/environment.ts",
+    "#database": "./src/database.ts",
+    "#validator": "./src/middleware/validator.ts",
+    "#require-auth": "./src/middleware/require-auth.ts",
+    "#test": "./src/lib/test.ts"
+  },
+  "scripts": {
+    "dev": "bun run drizzle/utils/migrate.ts && bun run drizzle/utils/seed.ts && bun run --hot src/index.ts",
+    "lint": "biome check",
+    "typecheck": "bunx --bun tsc --noEmit",
+    "test": "bun test",
+    "db:generate": "bunx --bun drizzle-kit generate",
+    "db:migrate": "bun run drizzle/utils/migrate.ts",
+    "db:seed": "bun run drizzle/utils/seed.ts",
+    "auth:generate": "bunx --bun @better-auth/cli generate --output drizzle/schema/auth.ts --config drizzle/utils/auth.ts"
+  },
+  "dependencies": {
+    "@hono/zod-validator": "^0.8.0",
+    "better-auth": "^1.6.15",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.25",
+    "neverthrow": "^8.1.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "drizzle-kit": "^0.31.10"
+  }
+}
