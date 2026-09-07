@@ -1,0 +1,3 @@
+# Biome formats to LF. Without this, a Windows checkout (core.autocrlf=true)
+# rewrites every file to CRLF and `bun run check` fails on files nobody edited.
+* text=auto eol=lf

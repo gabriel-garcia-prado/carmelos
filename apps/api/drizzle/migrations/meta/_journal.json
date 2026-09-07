@@ -8,6 +8,83 @@
       "when": 1781138620203,
       "tag": "0000_cold_steve_rogers",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786898405160,
+      "tag": "0001_nervous_scarlet_witch",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786898416260,
+      "tag": "0002_superb_chronomancer",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786902481347,
+      "tag": "0003_needy_thor",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786926204353,
+      "tag": "0004_daffy_strong_guy",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786935627713,
+      "tag": "0005_worried_whiplash",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787249809141,
+      "tag": "0006_bumpy_professor_monster",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787695679387,
+      "tag": "0007_nice_blue_marvel",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787721175636,
+      "tag": "0008_public_beast",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787754157747,
+      "tag": "0009_bitter_silver_samurai",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788007508812,
+      "tag": "0010_busy_red_hulk",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788063127858,
+      "tag": "0011_clammy_slayback",
+      "breakpoints": true
     }
   ]
 }

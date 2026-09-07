@@ -1,0 +1,1 @@
+ALTER TABLE "settings" ADD COLUMN "fire_grouping_window_minutes" integer DEFAULT 30 NOT NULL;

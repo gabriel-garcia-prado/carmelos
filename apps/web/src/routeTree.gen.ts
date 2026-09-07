@@ -8,53 +8,117 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { createFileRoute } from '@tanstack/react-router'
-
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthRouteImport } from './routes/_auth'
-import { Route as AuthDashboardRouteImport } from './routes/_auth.dashboard'
-
-const IndexLazyRouteImport = createFileRoute('/')()
+import { Route as AuthIndexRouteImport } from './routes/_auth.index'
+import { Route as AuthWeekRouteImport } from './routes/_auth.week'
+import { Route as AuthSettingsRouteImport } from './routes/_auth.settings'
+import { Route as AuthPeopleRouteImport } from './routes/_auth.people'
+import { Route as AuthEventsNewRouteImport } from './routes/_auth.events.new'
+import { Route as AuthEventsIdRouteImport } from './routes/_auth.events.$id'
+import { Route as AuthDayDateRouteImport } from './routes/_auth.day.$date'
 
 const AuthRoute = AuthRouteImport.update({
   id: '/_auth',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexLazyRoute = IndexLazyRouteImport.update({
+const AuthIndexRoute = AuthIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import('./routes/index.lazy').then((d) => d.Route))
-const AuthDashboardRoute = AuthDashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthWeekRoute = AuthWeekRouteImport.update({
+  id: '/week',
+  path: '/week',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthSettingsRoute = AuthSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthPeopleRoute = AuthPeopleRouteImport.update({
+  id: '/people',
+  path: '/people',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthEventsNewRoute = AuthEventsNewRouteImport.update({
+  id: '/events/new',
+  path: '/events/new',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthEventsIdRoute = AuthEventsIdRouteImport.update({
+  id: '/events/$id',
+  path: '/events/$id',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthDayDateRoute = AuthDayDateRouteImport.update({
+  id: '/day/$date',
+  path: '/day/$date',
   getParentRoute: () => AuthRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexLazyRoute
-  '/dashboard': typeof AuthDashboardRoute
+  '/': typeof AuthIndexRoute
+  '/people': typeof AuthPeopleRoute
+  '/settings': typeof AuthSettingsRoute
+  '/week': typeof AuthWeekRoute
+  '/day/$date': typeof AuthDayDateRoute
+  '/events/$id': typeof AuthEventsIdRoute
+  '/events/new': typeof AuthEventsNewRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexLazyRoute
-  '/dashboard': typeof AuthDashboardRoute
+  '/people': typeof AuthPeopleRoute
+  '/settings': typeof AuthSettingsRoute
+  '/week': typeof AuthWeekRoute
+  '/': typeof AuthIndexRoute
+  '/day/$date': typeof AuthDayDateRoute
+  '/events/$id': typeof AuthEventsIdRoute
+  '/events/new': typeof AuthEventsNewRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexLazyRoute
   '/_auth': typeof AuthRouteWithChildren
-  '/_auth/dashboard': typeof AuthDashboardRoute
+  '/_auth/people': typeof AuthPeopleRoute
+  '/_auth/settings': typeof AuthSettingsRoute
+  '/_auth/week': typeof AuthWeekRoute
+  '/_auth/': typeof AuthIndexRoute
+  '/_auth/day/$date': typeof AuthDayDateRoute
+  '/_auth/events/$id': typeof AuthEventsIdRoute
+  '/_auth/events/new': typeof AuthEventsNewRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/dashboard'
+  fullPaths:
+    | '/'
+    | '/people'
+    | '/settings'
+    | '/week'
+    | '/day/$date'
+    | '/events/$id'
+    | '/events/new'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/dashboard'
-  id: '__root__' | '/' | '/_auth' | '/_auth/dashboard'
+  to:
+    | '/people'
+    | '/settings'
+    | '/week'
+    | '/'
+    | '/day/$date'
+    | '/events/$id'
+    | '/events/new'
+  id:
+    | '__root__'
+    | '/_auth'
+    | '/_auth/people'
+    | '/_auth/settings'
+    | '/_auth/week'
+    | '/_auth/'
+    | '/_auth/day/$date'
+    | '/_auth/events/$id'
+    | '/_auth/events/new'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexLazyRoute: typeof IndexLazyRoute
   AuthRoute: typeof AuthRouteWithChildren
 }
 
@@ -67,35 +131,81 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
+    '/_auth/': {
+      id: '/_auth/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof IndexLazyRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AuthIndexRouteImport
+      parentRoute: typeof AuthRoute
     }
-    '/_auth/dashboard': {
-      id: '/_auth/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof AuthDashboardRouteImport
+    '/_auth/week': {
+      id: '/_auth/week'
+      path: '/week'
+      fullPath: '/week'
+      preLoaderRoute: typeof AuthWeekRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/settings': {
+      id: '/_auth/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AuthSettingsRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/people': {
+      id: '/_auth/people'
+      path: '/people'
+      fullPath: '/people'
+      preLoaderRoute: typeof AuthPeopleRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/events/new': {
+      id: '/_auth/events/new'
+      path: '/events/new'
+      fullPath: '/events/new'
+      preLoaderRoute: typeof AuthEventsNewRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/events/$id': {
+      id: '/_auth/events/$id'
+      path: '/events/$id'
+      fullPath: '/events/$id'
+      preLoaderRoute: typeof AuthEventsIdRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/day/$date': {
+      id: '/_auth/day/$date'
+      path: '/day/$date'
+      fullPath: '/day/$date'
+      preLoaderRoute: typeof AuthDayDateRouteImport
       parentRoute: typeof AuthRoute
     }
   }
 }
 
 interface AuthRouteChildren {
-  AuthDashboardRoute: typeof AuthDashboardRoute
+  AuthPeopleRoute: typeof AuthPeopleRoute
+  AuthSettingsRoute: typeof AuthSettingsRoute
+  AuthWeekRoute: typeof AuthWeekRoute
+  AuthIndexRoute: typeof AuthIndexRoute
+  AuthDayDateRoute: typeof AuthDayDateRoute
+  AuthEventsIdRoute: typeof AuthEventsIdRoute
+  AuthEventsNewRoute: typeof AuthEventsNewRoute
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
-  AuthDashboardRoute: AuthDashboardRoute,
+  AuthPeopleRoute: AuthPeopleRoute,
+  AuthSettingsRoute: AuthSettingsRoute,
+  AuthWeekRoute: AuthWeekRoute,
+  AuthIndexRoute: AuthIndexRoute,
+  AuthDayDateRoute: AuthDayDateRoute,
+  AuthEventsIdRoute: AuthEventsIdRoute,
+  AuthEventsNewRoute: AuthEventsNewRoute,
 }
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
-  IndexLazyRoute: IndexLazyRoute,
   AuthRoute: AuthRouteWithChildren,
 }
 export const routeTree = rootRouteImport

@@ -1,0 +1,1 @@
+ALTER TABLE "people" ADD COLUMN "is_pizzaiolo" boolean DEFAULT false NOT NULL;

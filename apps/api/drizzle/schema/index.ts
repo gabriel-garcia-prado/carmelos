@@ -1,2 +1,6 @@
 export * from './auth'
-export * from './hello-world'
+export * from './confirmations'
+export * from './events'
+export * from './people'
+export * from './settings'
+export * from './trucks'
