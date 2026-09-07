@@ -4,10 +4,10 @@ import { z } from 'zod'
 import { database, settings as settingsTable } from '#database'
 import type { DependencyError } from '#errors'
 import { factory } from '#factory'
-import { requireAuth } from '#require-auth'
+import { requireAuth, requireOwner } from '#require-auth'
 import { validator } from '#validator'
 import type { Settings } from './settings'
-import { getSettings, updateSettings } from './settings'
+import { getSettings, redactSettings, updateSettings } from './settings'
 
 const SETTINGS_ID = 'global'
 
@@ -51,7 +51,11 @@ const dependencies = {
 
 export const settingsRoutes = factory
   .createApp()
-  .get('/', requireAuth, async (c) => c.var.appResponse(await getSettings(dependencies)()))
-  .put('/', requireAuth, validator('json', schema), async (c) =>
+  // The client needs the timings to render a day at all, so the read stays
+  // open with pay stripped out; changing any of it is the operator's.
+  .get('/', requireAuth, async (c) =>
+    c.var.appResponse((await getSettings(dependencies)()).map((settings) => redactSettings(settings, c.var.viewer)))
+  )
+  .put('/', requireOwner, validator('json', schema), async (c) =>
     c.var.appResponse(await updateSettings(dependencies)(c.req.valid('json')))
   )

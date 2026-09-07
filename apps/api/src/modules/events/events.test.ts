@@ -3,7 +3,14 @@ import { okAsync } from 'neverthrow'
 import type { Person } from '../people/people'
 import type { Settings } from '../settings/settings'
 import type { EventRecord, PreviewDependencies, WriteDependencies } from './events'
-import { buildDayView, computeDesiredConfirmations, createEvent, previewTurnaround, updateRigCrew } from './events'
+import {
+  buildDayView,
+  computeDesiredConfirmations,
+  createEvent,
+  previewTurnaround,
+  scopeDayView,
+  updateRigCrew
+} from './events'
 
 const time = (hours: number, minutes = 0) => new Date(2026, 7, 8, hours, minutes)
 
@@ -485,5 +492,149 @@ describe('previewTurnaround', () => {
     expect(preview.rigDay?.rig).toBe('bus')
     expect(draft?.computed.leaveTime).toBeInstanceOf(Date)
     expect(draft?.firstPizzaTime).toEqual(time(13))
+  })
+})
+
+describe('scopeDayView', () => {
+  const OWNER = { role: 'owner' as const, personId: null }
+  const CREW = { role: 'crew' as const, personId: 'leo' }
+  const PIZZAIOLO = { role: 'pizzaiolo' as const, personId: 'kurt' }
+
+  // Two rigs, and two parties on the one Kurt and Leonardo are working.
+  const DAY = () =>
+    buildDayView(
+      '2026-08-08',
+      [
+        baseEvent({ id: 'lunch', rig: 'small_caddy', firstPizzaTime: time(13), clientName: 'Kaplan' }),
+        baseEvent({ id: 'dinner', rig: 'small_caddy', firstPizzaTime: time(19), clientName: 'Westfield' }),
+        baseEvent({
+          id: 'elsewhere',
+          rig: 'bus',
+          firstPizzaTime: time(15),
+          pizzaioloId: 'gabriel',
+          crewMemberId: 'matt',
+          clientName: 'Someone else'
+        })
+      ],
+      SETTINGS,
+      PEOPLE
+    )
+
+  const rigsOf = (view: ReturnType<typeof DAY>) => view.rigs.map((rig) => rig.rig)
+
+  test('the owner sees the day untouched', () => {
+    const day = DAY()
+    expect(scopeDayView(day, OWNER, SETTINGS)).toBe(day)
+  })
+
+  test('a rig the viewer has nothing to do with is dropped, not emptied', () => {
+    // Emptied would read as "nothing booked on the Bus today", which is a
+    // different and false statement.
+    expect(rigsOf(scopeDayView(DAY(), CREW, SETTINGS))).toEqual(['small_caddy'])
+    expect(rigsOf(scopeDayView(DAY(), PIZZAIOLO, SETTINGS))).toEqual(['small_caddy'])
+  })
+
+  test('a pizzaiolo gets their whole rig day, so the turnaround is visible', () => {
+    const scoped = scopeDayView(DAY(), PIZZAIOLO, SETTINGS)
+    expect(scoped.rigs[0]?.events.map((event) => event.id)).toEqual(['lunch', 'dinner'])
+  })
+
+  test('the schedule survives scoping: a kept event is still computed against the ones removed', () => {
+    // Leonardo is crew on both parties here, so take the second one and check
+    // it still knows it is not the first of the day.
+    const full = DAY()
+    const before = full.rigs.find((rig) => rig.rig === 'small_caddy')?.events.find((event) => event.id === 'dinner')
+    const after = scopeDayView(full, CREW, SETTINGS).rigs[0]?.events.find((event) => event.id === 'dinner')
+
+    expect(after?.computed.isFirstOfDay).toBe(false)
+    expect(after?.computed.turnaround).toBe(before?.computed.turnaround)
+    expect(after?.computed.leaveTime).toEqual(before?.computed.leaveTime as Date)
+  })
+
+  test('crew get only the shift they are on, not the rest of the rig day', () => {
+    const day = buildDayView(
+      '2026-08-08',
+      [
+        baseEvent({ id: 'lunch', rig: 'small_caddy', firstPizzaTime: time(13), clientName: 'Kaplan' }),
+        // Same rig, same day, someone else's shift.
+        baseEvent({
+          id: 'dinner',
+          rig: 'small_caddy',
+          firstPizzaTime: time(19),
+          crewMemberId: 'matt',
+          clientName: 'Westfield'
+        })
+      ],
+      SETTINGS,
+      PEOPLE
+    )
+
+    const scoped = scopeDayView(day, CREW, SETTINGS)
+    expect(scoped.rigs[0]?.events.map((event) => event.id)).toEqual(['lunch'])
+    // And the client they were never told about doesn't leak through.
+    expect(JSON.stringify(scoped)).not.toContain('Westfield')
+  })
+
+  test("lighting another rig's fire does not open that rig's day", () => {
+    const day = buildDayView(
+      '2026-08-08',
+      [
+        baseEvent({ id: 'own', rig: 'small_caddy', firstPizzaTime: time(13) }),
+        baseEvent({
+          id: 'covered',
+          rig: 'bus',
+          firstPizzaTime: time(15),
+          pizzaioloId: 'gabriel',
+          crewMemberId: 'matt',
+          fireDutyOverridePersonId: 'leo',
+          clientName: 'Bus party'
+        }),
+        baseEvent({
+          id: 'later-on-bus',
+          rig: 'bus',
+          firstPizzaTime: time(20),
+          pizzaioloId: 'gabriel',
+          crewMemberId: 'matt',
+          clientName: 'Later bus party'
+        })
+      ],
+      SETTINGS,
+      PEOPLE
+    )
+
+    // Leonardo lights the Bus's fire but works the Small Caddy. The early
+    // start is his; the Bus's bookings are not. His own lane carries the
+    // fire badge, so nothing is lost by dropping the rig entirely.
+    expect(day.rigs.find((rig) => rig.rig === 'bus')?.fireDuty?.litByPersonId).toBe('leo')
+
+    const scoped = scopeDayView(day, CREW, SETTINGS)
+    expect(scoped.rigs.map((rig) => rig.rig)).toEqual(['small_caddy'])
+    expect(JSON.stringify(scoped)).not.toContain('Bus party')
+
+    // The rig goes; the obligation doesn't. Without this the board would stop
+    // telling him he's due at the shop for a fire he still has to light.
+    expect(scoped.fireDutyElsewhere).toHaveLength(1)
+    expect(scoped.fireDutyElsewhere[0]).toMatchObject({ rig: 'bus', label: 'Bus', litByPersonId: 'leo' })
+    expect(scoped.fireDutyElsewhere[0]?.litAt).toEqual(
+      day.rigs.find((rig) => rig.rig === 'bus')?.fireDuty?.litAt as Date
+    )
+
+    // Same for a pizzaiolo sent to cover a fire.
+    const asPizzaiolo = scopeDayView(day, { role: 'pizzaiolo', personId: 'leo' }, SETTINGS)
+    expect(asPizzaiolo.rigs.map((rig) => rig.rig)).toEqual(['small_caddy'])
+  })
+
+  test('consumables are recounted from what is left, not carried over', () => {
+    const scoped = scopeDayView(DAY(), PIZZAIOLO, SETTINGS)
+    const full = DAY()
+    expect(scoped.consumables.totalPizzas).toBeLessThan(full.consumables.totalPizzas)
+    expect(scoped.consumables.totalPizzas).toBe(scoped.rigs[0]?.consumables.totalPizzas as number)
+  })
+
+  test('a crew login with no person attached sees nothing at all', () => {
+    // Failing open here would hand the whole book to a half-configured login.
+    const scoped = scopeDayView(DAY(), { role: 'crew', personId: null }, SETTINGS)
+    expect(scoped.rigs).toEqual([])
+    expect(scoped.consumables.totalPizzas).toBe(0)
   })
 })

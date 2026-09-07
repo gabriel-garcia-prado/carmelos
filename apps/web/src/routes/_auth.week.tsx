@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { WeekBoard } from '@/components/week-board'
 import { addDaysToKey, toDateKey } from '@/lib/format'
+import { useViewer } from '@/lib/use-viewer'
 
 const startOfWeek = (date: Date): Date => {
   const copy = new Date(date)
@@ -26,6 +27,7 @@ const shortWeekdayOf = (dateKey: string): string => {
 
 const Week = () => {
   const client = useApiClient()
+  const { isOwner } = useViewer()
   const { start } = Route.useSearch()
   const startDate = start ?? thisWeekStart
 
@@ -80,16 +82,19 @@ const Week = () => {
             </Link>
           </Button>
         </div>
-        <Button asChild size="sm">
-          <Link to="/day/$date" params={{ date: newEventDate }}>
-            + New event
-          </Link>
-        </Button>
+        {isOwner ? (
+          <Button asChild size="sm">
+            <Link to="/day/$date" params={{ date: newEventDate }}>
+              + New event
+            </Link>
+          </Button>
+        ) : null}
       </div>
       <WeekBoard
         days={week.data}
         ovenToTempMinutes={settings.data.ovenToTempMinutes}
         spareFoldThresholdMinutes={settings.data.spareFoldThresholdMinutes}
+        showFreeRigs={isOwner}
       />
 
       <Card>

@@ -43,7 +43,7 @@ export type EventPreviewLaneProperties = Readonly<{
  * this adds is the outline marking which chain is the new one.
  */
 export const EventPreviewLane = ({ rigDay, draftEventId, fit, settings }: EventPreviewLaneProperties) => {
-  const window_ = computeDayWindow({ date: '', rigs: [rigDay] })
+  const window_ = computeDayWindow({ date: '', rigs: [rigDay], fireDutyElsewhere: [] })
 
   // An empty rig on an empty day has no window to scale to, but the lane still
   // has a job: it holds its place from the moment the drawer opens, so nothing

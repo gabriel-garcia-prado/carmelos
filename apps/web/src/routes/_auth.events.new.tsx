@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { z } from 'zod'
-
 import { EventForm } from '@/components/event-form'
+import { OwnerOnly } from '@/components/owner-only'
 import { toDateKey } from '@/lib/format'
 import { RIGS } from '@/lib/rigs'
 
@@ -15,7 +15,13 @@ const NewEvent = () => {
   return <EventForm defaultDate={date ?? toDateKey(new Date())} defaultRig={rig} />
 }
 
+const GuardedNewEvent = () => (
+  <OwnerOnly>
+    <NewEvent />
+  </OwnerOnly>
+)
+
 export const Route = createFileRoute('/_auth/events/new')({
   validateSearch: searchSchema,
-  component: NewEvent
+  component: GuardedNewEvent
 })

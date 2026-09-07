@@ -1,5 +1,7 @@
 import { errAsync, type ResultAsync } from 'neverthrow'
 import type { AppError, DependencyError } from '#errors'
+import type { Viewer } from '../../lib/viewer'
+import { isOwner } from '../../lib/viewer'
 
 export type Person = Readonly<{
   id: string
@@ -12,6 +14,27 @@ export type Person = Readonly<{
   minutesBeforeDepartureOverride: number | null
   homeBaseAddress: string | null
 }>
+
+/**
+ * What a non-owner may see of the crew pool.
+ *
+ * Names stay: the day view identifies everyone by id, so without them a crew
+ * member can't be told who is running their rig. What goes is the reason the
+ * directory is sensitive in the first place — everyone's phone number, what
+ * they're paid, and where they live. `minutesBeforeDepartureOverride` stays
+ * because the client needs it to show the viewer their own arrival time.
+ */
+export type VisiblePerson = Omit<Person, 'phone'> & Readonly<{ phone: string | null }>
+
+export const redactPeople = (people: readonly Person[], viewer: Viewer): readonly VisiblePerson[] =>
+  isOwner(viewer)
+    ? people
+    : people.map((person) => ({
+        ...person,
+        phone: null,
+        rackRateOverridePer30Min: null,
+        homeBaseAddress: null
+      }))
 
 export type NewPerson = Readonly<{
   name: string

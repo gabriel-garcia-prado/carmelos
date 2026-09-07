@@ -3,6 +3,14 @@ export const formatClockTime = (iso: string | null | undefined): string => {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
 }
 
+/**
+ * The board's own convention: 12-hour, no meridiem.
+ *
+ * Every time on a lane is read against the ones above and below it, so AM/PM
+ * is noise — and at 8px it's noise that doubles the width of the label.
+ */
+export const formatLaneTime = (iso: string | null | undefined): string => formatClockTime(iso).replace(/\s?[AP]M$/, '')
+
 export const formatDuration = (minutes: number | null | undefined): string => {
   if (minutes === null || minutes === undefined) return '—'
   const hours = Math.floor(minutes / 60)

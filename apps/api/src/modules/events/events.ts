@@ -1,6 +1,6 @@
 import { errAsync, ResultAsync } from 'neverthrow'
 import type { AppError, DependencyError, ValidationError } from '#errors'
-import type { ConsumablesSummary } from '../../lib/consumables'
+import type { ConsumablesSettings, ConsumablesSummary } from '../../lib/consumables'
 import { computeConsumables } from '../../lib/consumables'
 import type { RigFireResult } from '../../lib/fire-duty'
 import { assignFireDuty } from '../../lib/fire-duty'
@@ -9,6 +9,8 @@ import { composeEventMessage, composeFireDutyNote } from '../../lib/messaging'
 import type { ComputedEvent, EventForScheduling, TurnaroundStatus } from '../../lib/scheduling'
 import { computeRigDay } from '../../lib/scheduling'
 import { addDays, addMinutes, toDateKey } from '../../lib/time'
+import type { Viewer } from '../../lib/viewer'
+import { isOwner } from '../../lib/viewer'
 import type { Person } from '../people/people'
 import type { Settings } from '../settings/settings'
 
@@ -88,10 +90,28 @@ export type RigDayView = Readonly<{
   consumables: ConsumablesSummary
 }>
 
+/**
+ * A fire the viewer has to light on a rig whose day they can't see.
+ *
+ * Dropping the rig is right — its bookings, client and crew are none of their
+ * business — but the obligation is theirs and has to survive the cut, or the
+ * board quietly stops telling someone they're due at the shop at half eight.
+ * Carries the minimum the badge needs: which rig, when, and whose job it is.
+ */
+export type OutsideFireDuty = Readonly<{
+  rig: Rig
+  label: string
+  litAt: Date
+  litByPersonId: string
+  truckId: string | null
+}>
+
 export type DayView = Readonly<{
   date: string
   rigs: readonly RigDayView[]
   consumables: ConsumablesSummary
+  /** Always empty for the operator, who can see those rigs for themselves. */
+  fireDutyElsewhere: readonly OutsideFireDuty[]
 }>
 
 const resolveRackRate = (people: readonly Person[], personId: string, fallback: number): number =>
@@ -104,7 +124,10 @@ const resolveMinutesBeforeDeparture = (
   rigOverride: number | null
 ): number => rigOverride ?? people.find((person) => person.id === personId)?.minutesBeforeDepartureOverride ?? fallback
 
-const consumablesInputFor = (rigEvents: readonly EventRecord[]) =>
+// Takes the stored record or the built view — both carry the two fields the
+// night-before arithmetic needs, and scoping a day recounts it from whatever
+// events survived.
+const consumablesInputFor = (rigEvents: readonly Pick<EventRecord, 'headcount' | 'specialRequests'>[]) =>
   rigEvents.map((event) => ({
     headcount: event.headcount,
     glutenFreeHeadcount: event.specialRequests
@@ -209,7 +232,77 @@ export const buildDayView = (
 
   const consumables = computeConsumables(consumablesInputFor(events), settings)
 
-  return { date, rigs: rigsWithFire, consumables }
+  return { date, rigs: rigsWithFire, consumables, fireDutyElsewhere: [] }
+}
+
+/**
+ * The same day, cut down to what this viewer is entitled to see.
+ *
+ * Applied to the fully built view on purpose, never by filtering events before
+ * scheduling them: turnaround, fire duty and "first of day" are properties of
+ * the whole rig day. A crew member looking at their 6pm shift still needs it
+ * computed against the 1pm party they can't see, or the setup window they're
+ * shown is one that doesn't exist.
+ *
+ * Rigs the viewer has nothing to do with are dropped rather than emptied —
+ * an empty rig means "nothing booked", which would be a lie.
+ */
+export const scopeDayView = (view: DayView, viewer: Viewer, settings: ConsumablesSettings): DayView => {
+  if (isOwner(viewer)) {
+    return view
+  }
+
+  const { personId } = viewer
+  if (personId === null) {
+    return { ...view, rigs: [], consumables: computeConsumables([], settings), fireDutyElsewhere: [] }
+  }
+
+  // Being sent to light another rig's fire is not a reason to see that rig's
+  // day. The obligation travels with the person, and the board already carries
+  // it as a badge on their own lane — the other rig's bookings, client and
+  // crew are somebody else's business.
+  const rigs = view.rigs.flatMap((rigView) => {
+    const isOn = (event: DayEventView) => event.pizzaioloId === personId || event.crewMemberId === personId
+    if (!rigView.events.some(isOn)) {
+      return []
+    }
+
+    // A pizzaiolo runs the rig, so they get its whole day: the turnaround
+    // between two parties is the pressure they personally absorb, and it's
+    // invisible if you only ever see one of them. Crew get the shifts they're
+    // on and nothing else.
+    const events = viewer.role === 'pizzaiolo' ? rigView.events : rigView.events.filter(isOn)
+
+    return [{ ...rigView, events, consumables: computeConsumables(consumablesInputFor(events), settings) }]
+  })
+
+  // Fires owed on rigs that just got dropped. Read off the unscoped view, so
+  // it sees the rigs this viewer can't.
+  const fireDutyElsewhere = view.rigs.flatMap((rigView) =>
+    rigView.fireDuty?.litByPersonId === personId && !rigs.some((kept) => kept.rig === rigView.rig)
+      ? [
+          {
+            rig: rigView.rig,
+            label: rigView.label,
+            litAt: rigView.fireDuty.litAt,
+            litByPersonId: rigView.fireDuty.litByPersonId,
+            // Only for naming the truck on the badge; the rest of that rig's
+            // day stays out of the response.
+            truckId:
+              [...rigView.events].sort(
+                (first, second) => first.firstPizzaTime.getTime() - second.firstPizzaTime.getTime()
+              )[0]?.truckId ?? null
+          }
+        ]
+      : []
+  )
+
+  return {
+    ...view,
+    rigs,
+    consumables: computeConsumables(consumablesInputFor(rigs.flatMap((rigView) => rigView.events)), settings),
+    fireDutyElsewhere
+  }
 }
 
 export type DesiredConfirmation = Readonly<{
@@ -474,14 +567,17 @@ export type GetDayViewDependencies = Readonly<{
   fetchPeople: () => ResultAsync<readonly Person[], DependencyError>
 }>
 
+// Scoping happens here rather than in the handler so it can't be forgotten:
+// there is no way to get a day view out of this module without saying who
+// it's for.
 export const getDayView =
   (dependencies: GetDayViewDependencies) =>
-  (date: string): ResultAsync<DayView, DependencyError> =>
+  (date: string, viewer: Viewer): ResultAsync<DayView, DependencyError> =>
     ResultAsync.combine([
       dependencies.fetchEventsForDate(date),
       dependencies.fetchSettings(),
       dependencies.fetchPeople()
-    ]).map(([events, settings, people]) => buildDayView(date, events, settings, people))
+    ]).map(([events, settings, people]) => scopeDayView(buildDayView(date, events, settings, people), viewer, settings))
 
 export type GetWeekViewDependencies = Readonly<{
   fetchEventsForRange: (
@@ -503,7 +599,7 @@ export const getEvent =
 
 export const getWeekView =
   (dependencies: GetWeekViewDependencies) =>
-  (startDate: string): ResultAsync<readonly DayView[], DependencyError> =>
+  (startDate: string, viewer: Viewer): ResultAsync<readonly DayView[], DependencyError> =>
     ResultAsync.combine([
       dependencies.fetchEventsForRange(startDate, addDays(startDate, 7)),
       dependencies.fetchSettings(),
@@ -512,7 +608,7 @@ export const getWeekView =
       Array.from({ length: 7 }, (_, offset) => {
         const date = addDays(startDate, offset)
         const eventsThatDay = events.filter((event) => toDateKey(event.firstPizzaTime) === date)
-        return buildDayView(date, eventsThatDay, settings, people)
+        return scopeDayView(buildDayView(date, eventsThatDay, settings, people), viewer, settings)
       })
     )
 

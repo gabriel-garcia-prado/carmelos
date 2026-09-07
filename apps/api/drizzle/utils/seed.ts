@@ -14,9 +14,22 @@ import { buildDayView, computeDesiredConfirmations } from '../../src/modules/eve
 
 export const DEV_USER = {
   name: 'Dev User',
-  email: 'dev@example.com',
+  email: 'manager@example.com',
   password: 'password1234'
 }
+
+/**
+ * Logins whose address said who the person was before it said what they do.
+ *
+ * Renamed in place rather than left behind, so an existing dev database ends
+ * up with the three role-shaped logins and not six. Better Auth keys the
+ * credential row by user id, not by address, so the password still works.
+ */
+const RENAMED_LOGINS = [
+  { from: 'dev@example.com', to: DEV_USER.email },
+  { from: 'kurt@example.com', to: 'pizzaiolo@example.com' },
+  { from: 'leonardo@example.com', to: 'crew@example.com' }
+]
 
 // Constants from the ops spec (§3), the defaults every event is computed
 // against until Billy changes them.
@@ -57,6 +70,22 @@ if (process.env.NODE_ENV === 'production') {
   process.exit(1)
 }
 
+for (const { from, to } of RENAMED_LOGINS) {
+  const [stale] = await database.select().from(user).where(eq(user.email, from))
+  if (!stale) {
+    continue
+  }
+  // Email is unique. If a run already created the new address, the old row is
+  // a duplicate rather than something to rename, so leave it alone and say so.
+  const [taken] = await database.select().from(user).where(eq(user.email, to))
+  if (taken) {
+    console.log(`[SEED] ${from} is superseded by ${to} — delete it by hand if you want it gone`)
+    continue
+  }
+  await database.update(user).set({ email: to }).where(eq(user.email, from))
+  console.log(`[SEED] renamed ${from} to ${to}`)
+}
+
 const existingUser = await database.select().from(user).where(eq(user.email, DEV_USER.email))
 
 if (existingUser.length > 0) {
@@ -65,6 +94,11 @@ if (existingUser.length > 0) {
   await auth.api.signUpEmail({ body: DEV_USER })
   console.log(`[SEED] created dev user — email: ${DEV_USER.email}, password: ${DEV_USER.password}`)
 }
+
+// Roles arrived after this user did, and the column defaults to the least it
+// could be. Promoting on every run rather than only at creation is what keeps
+// an existing dev database from quietly locking Billy out of his own app.
+await database.update(user).set({ role: 'owner', personId: null }).where(eq(user.email, DEV_USER.email))
 
 const existingSettings = await database.select().from(settings).where(eq(settings.id, 'global'))
 
@@ -117,6 +151,41 @@ for (const person of CREW) {
       canDriveTrailer: person.canDriveTrailer
     })
     .where(eq(people.name, person.name))
+}
+
+/**
+ * Logins for the crew pool, so the restricted views are something you can
+ * actually sign into and look at.
+ *
+ * The link to a people row is the whole point: without it "their own shifts"
+ * has nothing to resolve against, and the app shows them nothing. Kurt runs a
+ * rig and Leonardo doesn't, which is also the pair that demonstrates fire duty
+ * — Leonardo covers other rigs' fires on the seeded days.
+ */
+const CREW_LOGINS = [
+  { name: 'Kurt', email: 'pizzaiolo@example.com', password: 'password1234', role: 'pizzaiolo' },
+  { name: 'Leonardo', email: 'crew@example.com', password: 'password1234', role: 'crew' }
+]
+
+const pool = await database.select().from(people)
+
+for (const login of CREW_LOGINS) {
+  const person = pool.find((candidate) => candidate.name === login.name)
+  if (!person) {
+    console.warn(`[SEED] no crew member named ${login.name} — skipping their login`)
+    continue
+  }
+
+  const existingLogin = await database.select().from(user).where(eq(user.email, login.email))
+  if (existingLogin.length === 0) {
+    await auth.api.signUpEmail({ body: { name: login.name, email: login.email, password: login.password } })
+  }
+
+  // role and personId are `input: false` in auth.config.ts — deliberately not
+  // settable through sign-up, since a self-assigned role is not a role. They
+  // get written straight to the row instead.
+  await database.update(user).set({ role: login.role, personId: person.id }).where(eq(user.email, login.email))
+  console.log(`[SEED] ${login.role} login — email: ${login.email}, password: ${login.password}`)
 }
 
 // The vehicles themselves. Ids are stable slugs so an event can name one

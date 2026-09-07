@@ -33,7 +33,8 @@ const dayNumberOf = (dateKey: string): number => Number(dateKey.split('-')[2])
  * them to key one placeholder each on a wide screen.
  */
 const rigsFor = (
-  day: DayViewJson
+  day: DayViewJson,
+  showFreeRigs: boolean
 ): Readonly<{ working: readonly { rig: Rig; rigDay: RigDayJson }[]; free: readonly Rig[] }> => {
   const entries = RIGS.map((rig) => ({ rig, rigDay: day.rigs.find((candidate) => candidate.rig === rig) }))
   const startOf = (rigDay: RigDayJson): number =>
@@ -44,7 +45,11 @@ const rigsFor = (
       entry.rigDay && entry.rigDay.events.length > 0 ? [{ rig: entry.rig, rigDay: entry.rigDay }] : []
     )
     .sort((a, b) => startOf(a.rigDay) - startOf(b.rigDay))
-  return { working, free: RIGS.filter((rig) => !working.some((entry) => entry.rig === rig)) }
+  // Free rigs are the ones this viewer isn't shown working. For someone who
+  // only ever sees their own rig that's the other three every day of the week,
+  // which would draw the fleet they were never meant to see, in dashes.
+  const free = showFreeRigs ? RIGS.filter((rig) => !working.some((entry) => entry.rig === rig)) : []
+  return { working, free }
 }
 
 // A day with nothing booked gets a fraction of a working day's width. It
@@ -65,6 +70,14 @@ export type WeekBoardProperties = Readonly<{
   days: readonly DayViewJson[]
   ovenToTempMinutes: number
   spareFoldThresholdMinutes: number
+  /**
+   * Whether to draw a placeholder for the rigs not working a given day.
+   *
+   * False for a crew or pizzaiolo login: their week is one lane per day, the
+   * one they're on, and four dashed slots would be an outline of a fleet
+   * they're not being shown.
+   */
+  showFreeRigs: boolean
 }>
 
 /**
@@ -73,7 +86,12 @@ export type WeekBoardProperties = Readonly<{
  * day reads as mostly-empty and a full one fills the strip top to bottom.
  * Every day column gets a divider on its left.
  */
-export const WeekBoard = ({ days, ovenToTempMinutes, spareFoldThresholdMinutes }: WeekBoardProperties) => {
+export const WeekBoard = ({
+  days,
+  ovenToTempMinutes,
+  spareFoldThresholdMinutes,
+  showFreeRigs
+}: WeekBoardProperties) => {
   const today = toDateKey(new Date())
 
   // A shared window, but of TIME OF DAY — not an absolute datetime range.
@@ -168,7 +186,9 @@ export const WeekBoard = ({ days, ovenToTempMinutes, spareFoldThresholdMinutes }
                 : null
             // Without a window there's nothing to scale against, so the whole
             // day reads as free rather than drawing shapeless strips.
-            const { working, free } = window_ ? rigsFor(day) : { working: [], free: RIGS }
+            const { working, free } = window_
+              ? rigsFor(day, showFreeRigs)
+              : { working: [], free: showFreeRigs ? RIGS : [] }
 
             return (
               <Link

@@ -93,6 +93,9 @@ const dependencies = {
 
 export const driveTimeRoutes = factory
   .createApp()
+  // Any login, not just the operator's: this measures two addresses handed to
+  // it and reads nothing from our own data, and the person who most needs to
+  // know the drive is worse than planned is the one about to make it.
   .post('/', requireAuth, validator('json', schema), async (c) =>
     c.var.appResponse((await getDriveMinutes(dependencies)(c.req.valid('json'))).map((minutes) => ({ minutes })))
   )
