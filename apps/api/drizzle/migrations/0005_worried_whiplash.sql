@@ -1,0 +1,1 @@
+ALTER TABLE "settings" ADD COLUMN "spare_fold_threshold_minutes" integer DEFAULT 10 NOT NULL;

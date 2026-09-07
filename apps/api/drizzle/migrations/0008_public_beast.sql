@@ -1,0 +1,1 @@
+ALTER TABLE "events" ADD COLUMN "crew_arrival_override_minutes" integer;

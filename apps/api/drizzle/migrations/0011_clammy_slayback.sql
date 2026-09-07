@@ -1,0 +1,1 @@
+ALTER TABLE "trucks" ADD COLUMN "short_name" text;

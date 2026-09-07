@@ -1,0 +1,1 @@
+ALTER TABLE "settings" ADD COLUMN "kitchen_address" text;

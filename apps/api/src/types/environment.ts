@@ -12,6 +12,16 @@ export const environmentSchema = z
     POSTGRES_HOST: z.string().min(1).default('localhost'),
     BETTER_AUTH_SECRET: z.string().min(1),
     BETTER_AUTH_URL: z.url(),
+    // Optional — only needed for the drive-time auto-calculation. Without it,
+    // that endpoint returns a validation error telling Billy to set it.
+    GOOGLE_MAPS_API_KEY: z.string().min(1).optional(),
+    // Dev-only: serve stand-in forecasts instead of calling Google Geocoding
+    // + the National Weather Service, so the weather badges can be seen
+    // without a key. Never set this in production.
+    MOCK_WEATHER: z
+      .string()
+      .optional()
+      .transform((value) => value === 'true'),
     // Comma-separated list of extra origins allowed to call the auth endpoints
     // (e.g. the Vite dev server). Same-origin requests are always allowed.
     TRUSTED_ORIGINS: z

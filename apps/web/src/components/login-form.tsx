@@ -35,59 +35,56 @@ export function LoginForm({ onSubmit }: Properties) {
         <CardDescription>Enter your email below to login to your account</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-4">
-          <form
-            onSubmit={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              form.handleSubmit()
-            }}
-          >
-            <div className="grid gap-2">
-              <Label htmlFor="email">Email</Label>
-              <form.Field
-                name="email"
-                children={(field) => (
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="m@example.com"
-                    required
-                    value={field.state.value}
-                    onBlur={field.handleBlur}
-                    onChange={(event) => field.handleChange(event.target.value)}
-                  />
-                )}
-              />
-            </div>
-            <div className="grid gap-2">
-              <div className="flex items-center">
-                <Label htmlFor="password">Password</Label>
-              </div>
-              <form.Field
-                name="password"
-                children={(field) => (
-                  <Input
-                    id="password"
-                    type="password"
-                    required
-                    value={field.state.value}
-                    onBlur={field.handleBlur}
-                    onChange={(event) => field.handleChange(event.target.value)}
-                  />
-                )}
-              />
-            </div>
-            {errorMessage ? (
-              <p className="text-sm text-destructive" role="alert">
-                {errorMessage}
-              </p>
-            ) : undefined}
-            <Button type="submit" className="w-full">
-              Login
-            </Button>
-          </form>
-        </div>
+        <form
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            form.handleSubmit()
+          }}
+        >
+          <div className="grid gap-2">
+            <Label htmlFor="email">Email</Label>
+            <form.Field
+              name="email"
+              children={(field) => (
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="m@example.com"
+                  required
+                  value={field.state.value}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                />
+              )}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="password">Password</Label>
+            <form.Field
+              name="password"
+              children={(field) => (
+                <Input
+                  id="password"
+                  type="password"
+                  required
+                  value={field.state.value}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                />
+              )}
+            />
+          </div>
+          {errorMessage ? (
+            <p className="text-sm text-destructive" role="alert">
+              {errorMessage}
+            </p>
+          ) : undefined}
+          <Button type="submit" className="w-full">
+            Login
+          </Button>
+        </form>
       </CardContent>
     </Card>
   )
