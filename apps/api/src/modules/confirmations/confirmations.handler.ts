@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { eventConfirmations as confirmationsTable, database, events as eventsTable } from '#database'
 import type { DependencyError } from '#errors'
 import { factory } from '#factory'
-import { requireAuth } from '#require-auth'
+import { requireOwner } from '#require-auth'
 import { validator } from '#validator'
 import { addDays, parseDateKey } from '../../lib/time'
 import type { Confirmation, ConfirmationStatus } from './confirmations'
@@ -53,10 +53,10 @@ const dependencies = {
 
 export const confirmationsRoutes = factory
   .createApp()
-  .get('/day/:date', requireAuth, validator('param', dateParamSchema), async (c) =>
+  .get('/day/:date', requireOwner, validator('param', dateParamSchema), async (c) =>
     c.var.appResponse(await listConfirmationsForDate(dependencies)(c.req.valid('param').date))
   )
-  .patch('/:id', requireAuth, validator('param', idParamSchema), validator('json', statusSchema), async (c) =>
+  .patch('/:id', requireOwner, validator('param', idParamSchema), validator('json', statusSchema), async (c) =>
     c.var.appResponse(
       await updateConfirmationStatus(dependencies)({ id: c.req.valid('param').id, status: c.req.valid('json').status })
     )

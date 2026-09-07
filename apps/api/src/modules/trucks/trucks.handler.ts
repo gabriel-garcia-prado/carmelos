@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { database, events as eventsTable, trucks as trucksTable } from '#database'
 import type { DependencyError } from '#errors'
 import { factory } from '#factory'
-import { requireAuth } from '#require-auth'
+import { requireAuth, requireOwner } from '#require-auth'
 import { validator } from '#validator'
 import type { Rig } from '../events/events'
 import { RIGS } from '../events/events'
@@ -68,12 +68,12 @@ const dependencies = {
 export const truckRoutes = factory
   .createApp()
   .get('/', requireAuth, async (c) => c.var.appResponse(await listTrucks(dependencies)()))
-  .post('/', requireAuth, validator('json', truckSchema), async (c) =>
+  .post('/', requireOwner, validator('json', truckSchema), async (c) =>
     c.var.appResponse(await createTruck(dependencies)(c.req.valid('json') as NewTruck))
   )
-  .patch('/:id', requireAuth, validator('param', paramSchema), validator('json', updateTruckSchema), async (c) =>
+  .patch('/:id', requireOwner, validator('param', paramSchema), validator('json', updateTruckSchema), async (c) =>
     c.var.appResponse(await updateTruck(dependencies)({ id: c.req.valid('param').id, ...c.req.valid('json') }))
   )
-  .delete('/:id', requireAuth, validator('param', paramSchema), async (c) =>
+  .delete('/:id', requireOwner, validator('param', paramSchema), async (c) =>
     c.var.appResponse(await deleteTruck(dependencies)(c.req.valid('param').id))
   )

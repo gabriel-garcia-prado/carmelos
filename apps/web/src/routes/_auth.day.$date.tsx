@@ -17,6 +17,7 @@ import { addDaysToKey, formatClockTime, formatDateLabel, toDateKey } from '@/lib
 import type { Rig } from '@/lib/rigs'
 import { smsHref } from '@/lib/sms'
 import { useIsTouchDevice } from '@/lib/use-touch-device'
+import { useViewer } from '@/lib/use-viewer'
 
 type DrawerState = Readonly<{ kind: 'event'; eventId?: string; rig?: Rig }> | Readonly<{ kind: 'rig-crew'; rig: Rig }>
 
@@ -199,6 +200,7 @@ const Day = () => {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [drawer, setDrawer] = useState<DrawerState | null>(null)
+  const { isOwner } = useViewer()
 
   const dayView = useQuery({
     queryKey: ['day', date],
@@ -238,6 +240,9 @@ const Day = () => {
 
   const confirmations = useQuery({
     queryKey: ['confirmations', date],
+    // The crew texts are the operator's tool - the API answers 403 for anyone
+    // else, so don't ask and don't leave the page stuck in an error state.
+    enabled: isOwner,
     queryFn: async () => {
       const response = await client.api.confirmations.day[':date'].$get({ param: { date } })
       if (!response.ok) throw new Error('Failed to load confirmations')
@@ -324,7 +329,9 @@ const Day = () => {
         {
           personId,
           personName: person.name,
-          personPhone: person.phone,
+          // Redacted to null for non-owners; this whole panel is the
+          // operator's, so an empty string never reaches a link.
+          personPhone: person.phone ?? '',
           homeRigRig: homeRig?.rig ?? 'other',
           homeRigLabel: homeRig?.label ?? 'Other',
           role,
@@ -358,9 +365,11 @@ const Day = () => {
             </Link>
           </Button>
         </div>
-        <Button size="sm" onClick={() => setDrawer({ kind: 'event' })}>
-          + New event
-        </Button>
+        {isOwner ? (
+          <Button size="sm" onClick={() => setDrawer({ kind: 'event' })}>
+            + New event
+          </Button>
+        ) : null}
       </div>
 
       <DayBoard
@@ -373,6 +382,8 @@ const Day = () => {
           setDrawer({ kind: 'event', eventId, rig: rig?.rig })
         }}
         onEditRigCrew={(rig) => setDrawer({ kind: 'rig-crew', rig })}
+        canEdit={isOwner}
+        expandSoleRig={!isOwner}
       />
 
       <Card>
@@ -380,7 +391,7 @@ const Day = () => {
           <CardTitle>Day before list</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {confirmations.isError ? (
+          {isOwner && confirmations.isError ? (
             <p className="text-sm text-destructive">Couldn't load confirmations — crew texts are hidden.</p>
           ) : null}
 
@@ -388,15 +399,20 @@ const Day = () => {
             .filter((rig) => rig.events.length > 0)
             .map((rig) => (
               <RigGroup key={rig.rig} title={rig.label}>
-                {confirmations.isPending ? (
-                  <Skeleton className="mb-3 h-16 w-full" />
-                ) : (
-                  <CrewRows
-                    groups={groupsByRig.find((entry) => entry.rig === rig.rig)?.groups ?? []}
-                    onSetStatus={(ids, status) => setStatus.mutate({ ids, status })}
-                    divider
-                  />
-                )}
+                {/* Whose text has gone out is the operator's business; the
+                    crew see the prep numbers for their own rig and nothing
+                    about who else was contacted. */}
+                {isOwner ? (
+                  confirmations.isPending ? (
+                    <Skeleton className="mb-3 h-16 w-full" />
+                  ) : (
+                    <CrewRows
+                      groups={groupsByRig.find((entry) => entry.rig === rig.rig)?.groups ?? []}
+                      onSetStatus={(ids, status) => setStatus.mutate({ ids, status })}
+                      divider
+                    />
+                  )
+                ) : null}
                 <ConsumablesGrid consumables={rig.consumables} />
               </RigGroup>
             ))}
@@ -412,9 +428,14 @@ const Day = () => {
               </RigGroup>
             ))}
 
-          <RigGroup title="All rigs" isTotal>
-            <ConsumablesGrid consumables={view.consumables} />
-          </RigGroup>
+          {/* The day-wide total is a second copy of the same numbers once the
+              view is scoped to one rig, and it reads as a claim about the
+              whole operation that this person can't see. */}
+          {isOwner ? (
+            <RigGroup title="All rigs" isTotal>
+              <ConsumablesGrid consumables={view.consumables} />
+            </RigGroup>
+          ) : null}
         </CardContent>
       </Card>
 

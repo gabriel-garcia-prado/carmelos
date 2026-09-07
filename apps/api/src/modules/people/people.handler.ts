@@ -4,10 +4,10 @@ import { z } from 'zod'
 import { database, events as eventsTable, people as peopleTable } from '#database'
 import type { DependencyError } from '#errors'
 import { factory } from '#factory'
-import { requireAuth } from '#require-auth'
+import { requireAuth, requireOwner } from '#require-auth'
 import { validator } from '#validator'
 import type { NewPerson, Person, PersonUpdate } from './people'
-import { createPerson, deletePerson, listPeople, updatePerson } from './people'
+import { createPerson, deletePerson, listPeople, redactPeople, updatePerson } from './people'
 
 const newPersonSchema = z.object({
   name: z.string().min(1),
@@ -64,13 +64,17 @@ const dependencies = {
 
 export const peopleRoutes = factory
   .createApp()
-  .get('/', requireAuth, async (c) => c.var.appResponse(await listPeople(dependencies)()))
-  .post('/', requireAuth, validator('json', newPersonSchema), async (c) =>
+  // Everyone needs the roster to put names to the ids on their own shift, so
+  // the list stays open — but a non-owner gets it redacted down to that.
+  .get('/', requireAuth, async (c) =>
+    c.var.appResponse((await listPeople(dependencies)()).map((people) => redactPeople(people, c.var.viewer)))
+  )
+  .post('/', requireOwner, validator('json', newPersonSchema), async (c) =>
     c.var.appResponse(await createPerson(dependencies)(c.req.valid('json') as NewPerson))
   )
-  .patch('/:id', requireAuth, validator('param', paramSchema), validator('json', updatePersonSchema), async (c) =>
+  .patch('/:id', requireOwner, validator('param', paramSchema), validator('json', updatePersonSchema), async (c) =>
     c.var.appResponse(await updatePerson(dependencies)({ id: c.req.valid('param').id, ...c.req.valid('json') }))
   )
-  .delete('/:id', requireAuth, validator('param', paramSchema), async (c) =>
+  .delete('/:id', requireOwner, validator('param', paramSchema), async (c) =>
     c.var.appResponse(await deletePerson(dependencies)(c.req.valid('param').id))
   )

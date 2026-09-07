@@ -28,6 +28,23 @@ describe('app (integration)', () => {
     expect(response.status).toBe(401)
     expect(await response.json()).toEqual({ message: 'Unauthorized' })
   })
+
+  // Guards the wiring, not the rules: the rules themselves are unit-tested in
+  // events.test.ts. What this catches is a route registered without a guard at
+  // all, which is the mistake that actually happens — one new `.get(...)` that
+  // forgets the middleware and quietly serves the whole book.
+  test.each([
+    ['/api/events/day/2026-09-05'],
+    ['/api/events/week/2026-09-05'],
+    ['/api/people'],
+    ['/api/trucks'],
+    ['/api/settings'],
+    ['/api/confirmations/day/2026-09-05']
+  ])('GET %s without a session returns 401', async (path) => {
+    const response = await app.request(path)
+
+    expect(response.status).toBe(401)
+  })
 })
 
 // --- compile-time guardrails for the typed RPC client ---------------------

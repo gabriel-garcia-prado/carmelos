@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-
 import { useApiClient } from '@/components/api-client-provider'
+import { OwnerOnly } from '@/components/owner-only'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -414,4 +414,10 @@ const Settings = () => {
   )
 }
 
-export const Route = createFileRoute('/_auth/settings')({ component: Settings })
+const GuardedSettings = () => (
+  <OwnerOnly>
+    <Settings />
+  </OwnerOnly>
+)
+
+export const Route = createFileRoute('/_auth/settings')({ component: GuardedSettings })

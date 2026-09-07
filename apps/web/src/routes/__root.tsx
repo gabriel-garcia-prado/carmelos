@@ -6,9 +6,11 @@ import { ErrorBoundary } from '@/components/error-boundary'
 import { ModeToggle } from '@/components/mode-toggle'
 import { Menubar, MenubarContent, MenubarItem, MenubarMenu, MenubarTrigger } from '@/components/ui/menubar'
 import { client } from '@/lib/auth-client'
+import { useViewer } from '@/lib/use-viewer'
 
 const Root = () => {
   const { data } = client.useSession()
+  const { isOwner } = useViewer()
   return (
     <div className="">
       <div className="p-2 flex gap-2">
@@ -35,16 +37,20 @@ const Root = () => {
                   Week
                 </Link>
               </MenubarItem>
-              <MenubarItem asChild>
-                <Link to="/people" className="w-full cursor-default">
-                  People
-                </Link>
-              </MenubarItem>
-              <MenubarItem asChild>
-                <Link to="/settings" className="w-full cursor-default">
-                  Settings
-                </Link>
-              </MenubarItem>
+              {isOwner ? (
+                <>
+                  <MenubarItem asChild>
+                    <Link to="/people" className="w-full cursor-default">
+                      People
+                    </Link>
+                  </MenubarItem>
+                  <MenubarItem asChild>
+                    <Link to="/settings" className="w-full cursor-default">
+                      Settings
+                    </Link>
+                  </MenubarItem>
+                </>
+              ) : undefined}
               {data?.session ? (
                 <MenubarItem asChild>
                   <button type="button" className="w-full cursor-default text-left" onClick={() => client.signOut()}>

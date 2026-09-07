@@ -11,7 +11,7 @@ import {
 } from '#database'
 import type { DependencyError } from '#errors'
 import { factory } from '#factory'
-import { requireAuth } from '#require-auth'
+import { requireAuth, requireOwner } from '#require-auth'
 import { validator } from '#validator'
 import { addDays, parseDateKey } from '../../lib/time'
 import type { Person } from '../people/people'
@@ -298,27 +298,30 @@ const deleteDependencies: DeleteDependencies = {
 
 export const eventsRoutes = factory
   .createApp()
+  // The two read routes are the only ones the crew reach, and both come back
+  // scoped to the viewer. Everything below them is the operator's: reading a
+  // single event is the edit form's fetch, and the rest are writes.
   .get('/day/:date', requireAuth, validator('param', dateParamSchema), async (c) =>
-    c.var.appResponse(await getDayView(readDependencies)(c.req.valid('param').date))
+    c.var.appResponse(await getDayView(readDependencies)(c.req.valid('param').date, c.var.viewer))
   )
   .get('/week/:startDate', requireAuth, validator('param', weekParamSchema), async (c) =>
-    c.var.appResponse(await getWeekView(readDependencies)(c.req.valid('param').startDate))
+    c.var.appResponse(await getWeekView(readDependencies)(c.req.valid('param').startDate, c.var.viewer))
   )
-  .get('/:id', requireAuth, validator('param', paramSchema), async (c) =>
+  .get('/:id', requireOwner, validator('param', paramSchema), async (c) =>
     c.var.appResponse(await getEvent({ fetchEventById })(c.req.valid('param').id))
   )
-  .post('/preview', requireAuth, validator('json', previewEventSchema), async (c) =>
+  .post('/preview', requireOwner, validator('json', previewEventSchema), async (c) =>
     c.var.appResponse(await previewTurnaround(readDependencies)(c.req.valid('json')))
   )
-  .patch('/rig-crew', requireAuth, validator('json', rigCrewSchema), async (c) =>
+  .patch('/rig-crew', requireOwner, validator('json', rigCrewSchema), async (c) =>
     c.var.appResponse(await updateRigCrew(writeDependencies)(c.req.valid('json')))
   )
-  .post('/', requireAuth, validator('json', newEventSchema), async (c) =>
+  .post('/', requireOwner, validator('json', newEventSchema), async (c) =>
     c.var.appResponse(await createEvent(writeDependencies)(c.req.valid('json') as NewEventInput))
   )
-  .patch('/:id', requireAuth, validator('param', paramSchema), validator('json', updateEventSchema), async (c) =>
+  .patch('/:id', requireOwner, validator('param', paramSchema), validator('json', updateEventSchema), async (c) =>
     c.var.appResponse(await updateEvent(updateDependencies)({ id: c.req.valid('param').id, ...c.req.valid('json') }))
   )
-  .delete('/:id', requireAuth, validator('param', paramSchema), async (c) =>
+  .delete('/:id', requireOwner, validator('param', paramSchema), async (c) =>
     c.var.appResponse(await deleteEvent(deleteDependencies)(c.req.valid('param').id))
   )

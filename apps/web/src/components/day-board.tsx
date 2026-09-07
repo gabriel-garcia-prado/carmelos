@@ -1,5 +1,5 @@
 import { Pencil } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { TrafficBadge, WeatherBadges } from '@/components/event-status-badges'
 import { diffMinutes, initialsOf } from '@/lib/board-time'
@@ -10,10 +10,11 @@ import {
   buildBlocks,
   buildBoundaries,
   computeDayWindow,
+  labelMaskFor,
   legendSwatch,
   nameOf
 } from '@/lib/day-blocks'
-import { formatClockTime, toDateKey } from '@/lib/format'
+import { formatClockTime, formatLaneTime, toDateKey } from '@/lib/format'
 import type { Rig } from '@/lib/rigs'
 import { RIGS } from '@/lib/rigs'
 
@@ -76,6 +77,22 @@ const badgeTone = (tone: MomentBadge['tone']): string =>
       ? 'bg-foreground text-background ring-1 ring-inset ring-background'
       : 'bg-fired text-white'
 
+/**
+ * The line across the lane takes the colour of the badge sitting on it — the
+ * ring above, or for the red tag its fill, since it has no ring of its own.
+ * Kept next to `badgeTone` because it restates that function's colours: change
+ * one without the other and the line stops matching its badge.
+ */
+const momentLineColor = (tone: MomentBadge['tone']): string =>
+  tone === 'pizzaiolo' ? 'var(--foreground)' : tone === 'crew' ? 'var(--background)' : 'var(--fired)'
+
+/**
+ * Which badge lends the line its colour when several land on one minute.
+ * Running the rig outranks working on it, which outranks a fire owed on a rig
+ * that isn't this one — the order of how much the moment is about this lane.
+ */
+const TONE_PRIORITY: readonly MomentBadge['tone'][] = ['pizzaiolo', 'crew', 'away']
+
 export type TruckLike = Readonly<{ id: string; name: string; shortName: string | null }>
 
 /** The truck's own abbreviation, or the first word of its name when it hasn't
@@ -90,13 +107,64 @@ export type DayBoardProperties = Readonly<{
   trucks: readonly TruckLike[]
   onEditEvent: (eventId: string) => void
   onEditRigCrew: (rig: Rig) => void
+  /**
+   * Whether to offer the edit affordances at all. False for a crew or
+   * pizzaiolo login, who can read their day but not rewrite it - the API
+   * refuses those writes regardless, so this only keeps the board honest
+   * about what it offers.
+   */
+  canEdit: boolean
+  /**
+   * Open the lane on sight when it's the only one there is.
+   *
+   * The collapsed lane exists so several rigs fit side by side; someone who
+   * only ever sees their own has nothing to compare it against, and a
+   * collapsed single column is just a narrower version of the same thing with
+   * the labels taken away.
+   */
+  expandSoleRig: boolean
 }>
 
-export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEditRigCrew }: DayBoardProperties) => {
-  const [expandedRig, setExpandedRig] = useState<Rig | null>(null)
+export const DayBoard = ({
+  dayView,
+  people,
+  settings,
+  trucks,
+  onEditEvent,
+  onEditRigCrew,
+  canEdit,
+  expandSoleRig
+}: DayBoardProperties) => {
+  const [chosenRig, setChosenRig] = useState<Rig | null>(null)
+
+  // Read once at mount and then on every minute boundary, so a board left open
+  // doesn't keep pointing at whatever o'clock it happened to load at. Aligned
+  // to the next whole minute first: a bare 60s interval would drift to
+  // whenever this mounted and land the marker mid-minute for the rest of the
+  // session.
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | undefined
+    const timeout = setTimeout(
+      () => {
+        setNow(new Date())
+        interval = setInterval(() => setNow(new Date()), 60_000)
+      },
+      60_000 - (Date.now() % 60_000)
+    )
+    return () => {
+      clearTimeout(timeout)
+      if (interval) clearInterval(interval)
+    }
+  }, [])
 
   const populated = dayView.rigs.filter((rig) => rig.events.length > 0)
   const idle = dayView.rigs.filter((rig) => rig.events.length === 0)
+
+  // A forced expansion beats the click state rather than seeding it: seeding
+  // would go stale the moment the day's data arrived or changed.
+  const soleRig = expandSoleRig && populated.length === 1 ? (populated[0]?.rig ?? null) : null
+  const expandedRig = soleRig ?? chosenRig
 
   const orderedPopulated = [...populated].sort((a, b) => {
     const aTime = new Date(a.fireDuty?.litAt ?? a.events[0]?.computed.leaveTime ?? 0).getTime()
@@ -132,9 +200,7 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
 
   const minutesFromStart = (iso: string) => diffMinutes(iso, windowStart.toISOString())
 
-  // Hour ticks down the axis, a label every second hour, and a gridline
   // The current-time line only makes sense on today's board.
-  const now = new Date()
   const nowMinutes = diffMinutes(now.toISOString(), windowStart.toISOString())
   const nowVisible = dayView.date === toDateKey(now) && nowMinutes >= 0 && nowMinutes <= windowMinutes
   const nowTop = nowMinutes * PX_PER_MIN
@@ -179,11 +245,11 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                 key={rig.rig}
                 role="button"
                 tabIndex={isIdle ? -1 : 0}
-                onClick={() => !isIdle && setExpandedRig((current) => (current === rig.rig ? null : rig.rig))}
+                onClick={() => !isIdle && setChosenRig((current) => (current === rig.rig ? null : rig.rig))}
                 onKeyDown={(keyEvent) => {
                   if (isIdle || (keyEvent.key !== 'Enter' && keyEvent.key !== ' ')) return
                   keyEvent.preventDefault()
-                  setExpandedRig((current) => (current === rig.rig ? null : rig.rig))
+                  setChosenRig((current) => (current === rig.rig ? null : rig.rig))
                 }}
                 className={
                   isIdle
@@ -232,7 +298,7 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                         four targets competing with the tap that expands the
                         lane in the first place — and at that size the header
                         has barely room for the vehicle name and two chips. */}
-                    {isExpanded ? (
+                    {isExpanded && canEdit ? (
                       <button
                         type="button"
                         title={`Edit ${rig.label}'s crew`}
@@ -282,11 +348,16 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
           were there to let you read. */}
       <div className="flex" style={{ height: boardHeight }}>
         <div className="relative flex-1">
-          {/* Drawn behind the lanes (before them in paint order) so no
-              badge ever gets struck through by it. */}
+          {/* In front of the block fills, behind everything written on them.
+              Drawn first in the lanes' own stacking context and lifted with a
+              z-index rather than moved later in the DOM: paint order alone
+              would put it over the labels too, and a red rule struck through
+              the text is worse than not seeing the line at all. Nothing
+              between here and the raised elements may take a z-index of its
+              own, or they lose the ability to sit above this. */}
           {nowVisible ? (
             <div
-              className="pointer-events-none absolute inset-x-0 border-t-2 border-fired"
+              className="pointer-events-none absolute inset-x-0 z-10 border-t-2 border-fired"
               style={{ top: nowTop }}
               aria-hidden="true"
             />
@@ -395,14 +466,6 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                   ]
                 : []
 
-            const boundaries = isCollapsed
-              ? []
-              : buildBoundaries(
-                  blocks,
-                  windowStart.toISOString(),
-                  arrivals.map((arrival) => arrival.atIso)
-                )
-
             // Who lit this rig's fire — only shown as its own (all-red) pill
             // when someone from ANOTHER rig covered it; when this rig's own
             // pizzaiolo lit it, that's a small decoration on their arrival
@@ -441,12 +504,44 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                             ),
                             other.label
                           ),
-                          top: minutesFromStart(other.fireDuty.litAt) * PX_PER_MIN
+                          top: minutesFromStart(other.fireDuty.litAt) * PX_PER_MIN,
+                          atIso: other.fireDuty.litAt
                         }
                       ]
                     : []
                 )
               : []
+
+            // A viewer who only sees their own rig has had the covered rig cut
+            // out of the response entirely, so the scan above finds nothing.
+            // The duty still travelled with them — it arrives as its own list.
+            const alsoLightsElsewhere = dayView.fireDutyElsewhere.flatMap((duty) =>
+              duty.litByPersonId === pizzaioloId || duty.litByPersonId === crewMemberId
+                ? [
+                    {
+                      rig: duty.rig,
+                      label: shortLabelOf(
+                        trucks.find((truck) => truck.id === (duty.truckId ?? duty.rig)),
+                        duty.label
+                      ),
+                      top: minutesFromStart(duty.litAt) * PX_PER_MIN,
+                      atIso: duty.litAt
+                    }
+                  ]
+                : []
+            )
+
+            // Computed here rather than up with the blocks because the away
+            // fires feed it: their hour belongs in the gutter with every other
+            // clock reading on the lane, not printed on the tag itself, where
+            // it was the one time on the board written somewhere different
+            // from all the others.
+            const boundaries = isCollapsed
+              ? []
+              : buildBoundaries(blocks, windowStart.toISOString(), [
+                  ...arrivals.map((arrival) => arrival.atIso),
+                  ...[...alsoLights, ...alsoLightsElsewhere].flatMap((tag) => (tag.atIso ? [tag.atIso] : []))
+                ])
 
             // Everything that pins to a moment on this lane, in one list: the
             // two arrivals, a red pill for an opener covering from elsewhere,
@@ -478,7 +573,7 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                     }
                   ]
                 : []),
-              ...alsoLights.map((tag) => ({
+              ...[...alsoLights, ...alsoLightsElsewhere].map((tag) => ({
                 key: `also-${tag.rig}`,
                 top: tag.top,
                 label: tag.label,
@@ -486,6 +581,25 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                 tone: 'away' as const,
                 labelOptional: true
               }))
+            ]
+
+            // The rule across the lane that ties a badge to its moment, taken
+            // straight off the badges so the two can't disagree about either
+            // where a moment is or what colour it is. Keyed by minute, so
+            // several badges on one minute draw a single line rather than a
+            // stack of them; the top stays the unrounded pixel, so the line
+            // still lands exactly where its badges do.
+            const momentLines = [
+              ...momentBadges
+                .reduce((lines, badge) => {
+                  const minute = Math.round(badge.top)
+                  const existing = lines.get(minute)
+                  if (!existing || TONE_PRIORITY.indexOf(badge.tone) < TONE_PRIORITY.indexOf(existing.tone)) {
+                    lines.set(minute, { top: badge.top, tone: badge.tone })
+                  }
+                  return lines
+                }, new Map<number, { top: number; tone: MomentBadge['tone'] }>())
+                .entries()
             ]
 
             // Same moment means the same row, sitting side by side. Rows that
@@ -506,11 +620,11 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                 key={rig.rig}
                 role="button"
                 tabIndex={0}
-                onClick={() => setExpandedRig((current) => (current === rig.rig ? null : rig.rig))}
+                onClick={() => setChosenRig((current) => (current === rig.rig ? null : rig.rig))}
                 onKeyDown={(keyEvent) => {
                   if (keyEvent.key !== 'Enter' && keyEvent.key !== ' ') return
                   keyEvent.preventDefault()
-                  setExpandedRig((current) => (current === rig.rig ? null : rig.rig))
+                  setChosenRig((current) => (current === rig.rig ? null : rig.rig))
                 }}
                 className="absolute cursor-pointer rounded bg-muted/40 transition-all"
                 style={{ left: `${offset.leftPct}%`, width: `${offset.widthPct}%`, top: 0, height: boardHeight }}
@@ -518,34 +632,7 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                 {blocks.map((block) => {
                   const sourceEvent = block.eventId ? sortedEvents.find((event) => event.id === block.eventId) : null
                   const hasStar = block.kind === 'serve' && Boolean(sourceEvent?.specialRequests.length)
-                  // Rack is the one block with a patterned ground, and its
-                  // dots sit close enough together that glyph strokes cross
-                  // them constantly and fur up. Each line of text carries a
-                  // patch of the plain ground colour behind it, so the label
-                  // reads against flat serve at full contrast instead of the
-                  // text colour having to win against the dots. The negative
-                  // margin cancels the padding so the mask spreads slightly
-                  // wider than the glyphs without moving them.
-                  // A pill rather than a rounded box, padded out to 4px a side
-                  // so the edge runs through the whitespace around the glyphs
-                  // rather than hugging them. The negative margin gives that
-                  // padding back so the text still lines up with every other
-                  // block's label, and 4px leaves the patch 2px clear of the
-                  // block's own inner edge.
-                  //
-                  // The blurred shadow — same colour as the ground, so it's
-                  // invisible except where it lands on the pattern — is what
-                  // stops dots being sliced in half at the pill's edge. Any
-                  // hard boundary laid over a dot field cuts whichever dots it
-                  // crosses, and the pill can't dodge them: the lattice has a
-                  // dot centre every 2px while the pill is sized by text
-                  // metrics (12.7px tall here), so there's nothing to snap to.
-                  // Fading the ground outward instead means dots thin out
-                  // around the label rather than ending in a cut edge.
-                  const labelMask =
-                    block.kind === 'rack'
-                      ? 'inline-block max-w-full truncate rounded-full bg-serve shadow-[0_0_2px_1px_var(--serve)] -mx-0.5 px-0.5'
-                      : 'inline-block max-w-full truncate'
+                  const labelMask = labelMaskFor(block.kind)
 
                   return (
                     <div
@@ -572,27 +659,51 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                       }}
                     >
                       {!isCollapsed && block.height * PX_PER_MIN >= (isExpanded ? 11 : 14) ? (
-                        <>
-                          {/* Inline, not an absolute overlay — this box clips
-                              overflow, and an overlay star sat on top of the
-                              label's own first letter. */}
-                          <div className="font-semibold">
-                            <span className={labelMask}>
+                        // Positioned only to earn a z-index, so the current-time
+                        // rule passes behind the writing on the block.
+                        <div className="relative z-20">
+                          {/* Name and duration share a line: the duration used
+                              to cost a whole row of its own, which on a short
+                              block meant showing "Drive" and having no room
+                              left to say how long it was — the one thing the
+                              block is there to answer.
+
+                              The name truncates and the duration doesn't. If
+                              the lane is too narrow for both, losing the end of
+                              a client's name still leaves a legible block,
+                              whereas a half-eaten "1h 2…" is worse than
+                              nothing. Inline, not an absolute overlay — this
+                              box clips overflow, and an overlay star sat on top
+                              of the label's own first letter. */}
+                          <div className="flex items-baseline gap-1 font-semibold">
+                            <span className={`${labelMask} min-w-0`}>
                               {hasStar ? '★ ' : ''}
                               {block.label}
                             </span>
+                            {block.sublabel ? (
+                              <span className={`${labelMask} shrink-0 font-normal opacity-80`}>{block.sublabel}</span>
+                            ) : null}
                           </div>
-                          {block.sublabel && block.height * PX_PER_MIN >= (isExpanded ? 20 : 26) ? (
-                            <div className="opacity-80">
-                              <span className={labelMask}>{block.sublabel}</span>
-                            </div>
-                          ) : null}
-                          {block.detail && isExpanded && block.height * PX_PER_MIN >= 36 ? (
+                          {/* Now the second line rather than the third. 32px
+                              is measured, not guessed: one line of this text
+                              occupies 17px and two occupy 32px including the
+                              block's own padding. A 20-minute drive is 20px
+                              tall, so anything lower than this renders an
+                              address the block then cuts in half. */}
+                          {block.detail && isExpanded && block.height * PX_PER_MIN >= 32 ? (
                             <div className="opacity-70">
                               <span className={labelMask}>{block.detail}</span>
                             </div>
                           ) : null}
-                        </>
+                          {/* Third line, so it needs a third line's worth of
+                              room. Measured like the others: 17px for one line,
+                              32 for two, 48 for three. */}
+                          {block.note && isExpanded && block.height * PX_PER_MIN >= 48 ? (
+                            <div className="opacity-70">
+                              <span className={labelMask}>{block.note}</span>
+                            </div>
+                          ) : null}
+                        </div>
                       ) : hasStar && isCollapsed ? (
                         // No explicit text colour — inherits the block's own
                         // `text-serve-fg` (this is always a serve block), so
@@ -605,7 +716,11 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                           ★
                         </span>
                       ) : null}
-                      {block.kind === 'serve' && block.eventId && isExpanded && block.height * PX_PER_MIN >= 14 ? (
+                      {block.kind === 'serve' &&
+                      block.eventId &&
+                      isExpanded &&
+                      canEdit &&
+                      block.height * PX_PER_MIN >= 14 ? (
                         <button
                           type="button"
                           title="Edit this event"
@@ -647,7 +762,7 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                 {boundaries.map((boundary) => (
                   <span
                     key={`t-${boundary.top}`}
-                    className="pointer-events-none absolute left-0 -translate-y-1/2 font-mono text-[8px] leading-none text-muted-foreground"
+                    className="pointer-events-none absolute left-0 z-20 -translate-y-1/2 font-mono text-[8px] leading-none text-muted-foreground"
                     style={{ top: boundary.top * PX_PER_MIN }}
                   >
                     {boundary.label}
@@ -656,19 +771,19 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
 
                 {/* Divider lines drawn first (and thus behind), badges drawn
                     after (and thus in front) — as two separate passes, not
-                    interleaved per-arrival, so when two arrivals land at the
-                    same or nearby times, the SECOND one's full-width line
-                    can't paint over the FIRST one's badge. */}
+                    interleaved per-moment, so when two land at the same or
+                    nearby times, the SECOND one's full-width line can't paint
+                    over the FIRST one's badge. */}
                 {!isCollapsed &&
-                  arrivals.map((arrival) => (
+                  momentLines.map(([minute, line]) => (
                     <div
-                      key={arrival.key}
+                      key={`moment-${minute}`}
                       className="absolute border-t"
                       style={{
                         left: TIME_GUTTER + BLOCK_RADIUS,
                         right: BLOCK_INSET + BLOCK_RADIUS,
-                        top: minutesFromStart(arrival.atIso) * PX_PER_MIN,
-                        borderColor: 'var(--foreground)'
+                        top: line.top,
+                        borderColor: momentLineColor(line.tone)
                       }}
                     />
                   ))}
@@ -697,7 +812,7 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                   return (
                     <span
                       key={`row-${row.top}`}
-                      className="pointer-events-none absolute flex -translate-y-1/2 flex-nowrap items-center justify-center gap-0.5"
+                      className="pointer-events-none absolute z-20 flex -translate-y-1/2 flex-nowrap items-center justify-center gap-0.5"
                       style={{ left: isCollapsed ? BLOCK_INSET : TIME_GUTTER, right: BLOCK_INSET, top: row.top }}
                     >
                       {pinned.map((badge) => (
@@ -741,7 +856,7 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
                                       isExpanded ? 'grid-cols-[1fr]' : 'grid-cols-[0fr]'
                                     }`}
                                   >
-                                    <span className="min-w-0 overflow-hidden">{badge.label}</span>
+                                    <span className="min-w-0 overflow-hidden whitespace-nowrap">{badge.label}</span>
                                   </span>
                                   <span className={isCollapsed ? 'text-[7px]' : 'text-[8px]'}>🔥</span>
                                 </span>
@@ -774,15 +889,23 @@ export const DayBoard = ({ dayView, people, settings, trucks, onEditEvent, onEdi
             )
           })}
 
-          {/* The now marker's dot and clock read on top of everything — with
-              the hour axis gone this is the only absolute time on the board,
-              so it has to be legible over whatever block it lands on. */}
+          {/* The now marker's clock reads on top of everything — with the hour
+              axis gone this is the only absolute time on the board, so it has
+              to win over whatever it lands on. Above the seam times too (z-20,
+              inside the lanes): those sit at every block boundary, so one of
+              them lands on this pill often enough to matter, and the seam time
+              is the reading you can work out from the block either way. */}
           {nowVisible ? (
             <span
-              className="pointer-events-none absolute left-0 z-10 -translate-y-1/2 rounded-full bg-fired px-1 py-0.5 font-mono text-[8px] font-semibold leading-none text-white"
-              style={{ top: nowTop }}
+              // Hung from its RIGHT edge just inside the seam-time gutter, so
+              // it grows leftwards into the card's padding instead of out over
+              // the blocks. Anchoring the left edge meant a wider time — an
+              // 11:15 against a 3:30 — reached further across the lane and sat
+              // on whatever label was there.
+              className="pointer-events-none absolute z-30 -translate-x-full -translate-y-1/2 rounded-full bg-fired px-1 py-0.5 font-mono text-[8px] font-semibold leading-none text-white"
+              style={{ top: nowTop, left: TIME_GUTTER - 2 }}
             >
-              {formatClockTime(now.toISOString())}
+              {formatLaneTime(now.toISOString())}
             </span>
           ) : null}
         </div>

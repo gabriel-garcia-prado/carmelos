@@ -75,11 +75,15 @@ Generate a strong auth secret with `openssl rand -base64 32`.
 bun dev
 ```
 
-`bun dev` starts Postgres (Docker), applies pending migrations, seeds a dev user,
-then runs the API and web with hot reload. Sign in with:
+`bun dev` starts Postgres (Docker), applies pending migrations, seeds the dev
+logins, then runs the API and web with hot reload. Sign in as any of them — all
+three share the password `password1234`:
 
-- **Email:** `dev@example.com`
-- **Password:** `password1234`
+| Email | Sees |
+| --- | --- |
+| `manager@example.com` | Everything: the book, people, pay rates, settings, every write |
+| `pizzaiolo@example.com` | Their own rig's whole day, and nothing else |
+| `crew@example.com` | Only the shifts they're personally on |
 
 Visit:
 

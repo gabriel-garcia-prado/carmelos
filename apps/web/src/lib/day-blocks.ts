@@ -1,5 +1,5 @@
 import { addMinutesToIso, diffMinutes, roundDownToHalfHour, roundUpToHalfHour } from '@/lib/board-time'
-import { formatClockTime, formatDuration } from '@/lib/format'
+import { formatClockTime, formatDuration, formatLaneTime } from '@/lib/format'
 import type { Rig } from '@/lib/rigs'
 import { REQUEST_LABELS, type RequestType } from '@/lib/rigs'
 
@@ -66,9 +66,20 @@ export type RigDayJson = Readonly<{
   consumables: ConsumablesJson
 }>
 
+/** A fire owed on a rig this viewer isn't shown — see `OutsideFireDuty` on the
+ * API side. Empty for the operator, who can just look at the rig. */
+export type OutsideFireDutyJson = Readonly<{
+  rig: Rig
+  label: string
+  litAt: string
+  litByPersonId: string
+  truckId: string | null
+}>
+
 export type DayViewJson = Readonly<{
   date: string
   rigs: readonly RigDayJson[]
+  fireDutyElsewhere: readonly OutsideFireDutyJson[]
 }>
 
 export type PersonLike = Readonly<{ id: string; name: string; minutesBeforeDepartureOverride: number | null }>
@@ -87,6 +98,11 @@ export type Block = Readonly<{
   sublabel?: string
   /** Extra line shown only in the expanded (wide) lane — spec §11's real labels view. */
   detail?: string
+  /** A further line under `detail`, for something that must not be truncated
+   * away. The special requests used to ride on the end of the address, which
+   * is long enough on its own to push them past the edge of the lane — and
+   * they're the one thing on a serve block you can't guess from the rest. */
+  note?: string
   /** Set on the 'serve' and 'travel' blocks — the two that map 1:1 to a single event, so they're where the edit affordance and the traffic badge anchor. */
   eventId?: string
   /** Which event this block belongs to, for EVERY block derived from one —
@@ -111,6 +127,41 @@ export const blockStyle: Record<Block['kind'], string> = {
   serve: 'bg-serve text-serve-fg',
   spare: 'bg-spare text-spare-fg'
 }
+
+/**
+ * The block's own ground, per kind — what a line of its text sits on.
+ *
+ * Fire is painted with a gradient and takes the colour it starts from: its
+ * labels sit in the block's top-left corner, which is where the gradient still
+ * is that colour.
+ */
+const LABEL_GROUND: Record<Block['kind'], string> = {
+  fire: 'bg-ember-a shadow-[0_0_2px_1px_var(--ember-a)]',
+  travel: 'bg-travel shadow-[0_0_2px_1px_var(--travel)]',
+  work: 'bg-work shadow-[0_0_2px_1px_var(--work)]',
+  rack: 'bg-serve shadow-[0_0_2px_1px_var(--serve)]',
+  serve: 'bg-serve shadow-[0_0_2px_1px_var(--serve)]',
+  spare: 'bg-spare shadow-[0_0_2px_1px_var(--spare)]'
+}
+
+/**
+ * A patch of that ground behind one line of a block's text.
+ *
+ * It began as a fix for rack alone, whose dotted lattice has a dot centre
+ * every 2px and furred up the glyph strokes crossing it. Every kind needs it
+ * now that the current-time rule passes behind the writing: without a ground
+ * of its own, the red line runs through the gaps between the letters.
+ *
+ * A pill rather than a rounded box, padded 4px a side so its edge runs through
+ * the whitespace around the glyphs instead of hugging them; the negative
+ * margin gives that padding back so the text still lines up with every other
+ * block's label. The blurred shadow is the same colour as the patch, so it is
+ * invisible except where it lands on something else — on rack that is what
+ * stops dots being sliced in half at the pill's edge, since the pill is sized
+ * by text metrics and has nothing in the lattice to snap to.
+ */
+export const labelMaskFor = (kind: Block['kind']): string =>
+  `inline-block max-w-full truncate rounded-full -mx-0.5 px-0.5 ${LABEL_GROUND[kind]}`
 
 /**
  * The same paint as the block, minus its text colour — for the legend swatch.
@@ -261,7 +312,8 @@ export const buildBlocks = (
       // Duration, not the start time — the start is already printed on the
       // gap line just above this block (see `buildBoundaries`).
       sublabel: `${formatDuration(diffMinutes(event.computed.serviceEndTime, event.firstPizzaTime))} · ${event.headcount}p`,
-      detail: requestSummary ? `${event.address} · ${requestSummary}` : event.address,
+      detail: event.address,
+      note: requestSummary || undefined,
       eventId: event.id
     })
 
@@ -323,7 +375,7 @@ export const buildBoundaries = (
     // narrow gutter, and the day's own span already fixes am/pm.
     boundaries.push({
       top: minute,
-      label: formatClockTime(addMinutesToIso(windowStartIso, minute)).replace(/\s?[AP]M$/, '')
+      label: formatLaneTime(addMinutesToIso(windowStartIso, minute))
     })
   }
   return boundaries.sort((a, b) => a.top - b.top)

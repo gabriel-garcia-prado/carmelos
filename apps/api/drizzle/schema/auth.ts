@@ -7,7 +7,16 @@ export const user = pgTable('user', {
   emailVerified: boolean('email_verified').notNull(),
   image: text('image'),
   createdAt: timestamp('created_at').notNull(),
-  updatedAt: timestamp('updated_at').notNull()
+  updatedAt: timestamp('updated_at').notNull(),
+  // These two mirror `user.additionalFields` in auth.config.ts and were added
+  // by hand, against the usual rule for this file. `bun auth:generate` can't
+  // produce them here: the published @better-auth/cli (1.4.21) lags the
+  // library (1.6.15) and rewrites the whole file to an older template —
+  // cascade deletes, extra indexes, a NOT NULL on verification.created_at.
+  // If you regenerate with a CLI that matches the library, drop this comment
+  // and take the generated output instead.
+  role: text('role').default('crew'),
+  personId: text('person_id')
 })
 
 export const session = pgTable('session', {

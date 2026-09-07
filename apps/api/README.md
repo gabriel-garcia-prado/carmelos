@@ -251,10 +251,14 @@ under `/api/auth/*` in `src/index.ts`, and its tables live in `drizzle/schema/au
 - Regenerate the auth schema after upgrading Better Auth: `bun auth:generate`
 - `secret`, `baseURL` and `trustedOrigins` come from the validated environment
   (`BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `TRUSTED_ORIGINS`).
-- In dev, `drizzle/utils/seed.ts` creates a known user through Better Auth's own
-  API (`dev@example.com` / `password1234`) so you can sign in immediately. It is
-  idempotent, refuses to run with `NODE_ENV=production`, and is not part of the
-  production container CMD.
+- In dev, `drizzle/utils/seed.ts` creates three known users through Better Auth's
+  own API — `manager@example.com`, `pizzaiolo@example.com` and `crew@example.com`,
+  all with the password `password1234` — so you can sign in immediately and see
+  what each role is allowed to see. It is idempotent, refuses to run with
+  `NODE_ENV=production`, and is not part of the production container CMD.
+- `role` and `personId` are Better Auth `additionalFields` (see `auth.config.ts`),
+  both `input: false` so neither is settable through sign-up. The seed writes them
+  straight to the row. `src/lib/viewer.ts` defines what they mean.
 
 ## 🗄️ Database & migrations
 
