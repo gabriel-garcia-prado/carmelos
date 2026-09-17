@@ -4,7 +4,7 @@ import { timestamps } from '../utils/columns'
 import { events } from './events'
 import { people } from './people'
 
-export const confirmationRoleEnum = pgEnum('confirmation_role', ['pizzaiolo', 'crew', 'fire_duty'])
+export const confirmationRoleEnum = pgEnum('confirmation_role', ['pizzaiolo', 'crew', 'cutter', 'fire_duty'])
 export const confirmationStatusEnum = pgEnum('confirmation_status', ['pending', 'sent', 'confirmed', 'declined'])
 
 // One row per (event, person) who needs a text. Regenerated whenever the

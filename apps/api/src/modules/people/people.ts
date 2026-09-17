@@ -8,6 +8,8 @@ export type Person = Readonly<{
   name: string
   phone: string
   isPizzaiolo: boolean
+  /** False only for someone who cuts and nothing else — everyone else sticks. */
+  canStick: boolean
   canDrive: boolean
   canDriveTrailer: boolean
   rackRateOverridePer30Min: number | null
@@ -40,6 +42,8 @@ export type NewPerson = Readonly<{
   name: string
   phone: string
   isPizzaiolo: boolean
+  /** False only for someone who cuts and nothing else — everyone else sticks. */
+  canStick: boolean
   canDrive: boolean
   canDriveTrailer: boolean
   rackRateOverridePer30Min: number | null

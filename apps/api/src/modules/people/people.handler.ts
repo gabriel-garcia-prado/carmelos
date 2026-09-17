@@ -1,7 +1,7 @@
-import { asc, desc, eq, or } from 'drizzle-orm'
+import { asc, desc, eq } from 'drizzle-orm'
 import { errAsync, okAsync, ResultAsync } from 'neverthrow'
 import { z } from 'zod'
-import { database, events as eventsTable, people as peopleTable } from '#database'
+import { eventAssignments as assignmentsTable, database, people as peopleTable } from '#database'
 import type { DependencyError } from '#errors'
 import { factory } from '#factory'
 import { requireAuth, requireOwner } from '#require-auth'
@@ -50,10 +50,7 @@ const dependencies = {
     ).andThen(([row]) => (row ? okAsync(row as Person) : errAsync(dependencyError('person not found', id)))),
   countEventsUsing: (id: string): ResultAsync<number, DependencyError> =>
     ResultAsync.fromPromise(
-      database
-        .select({ id: eventsTable.id })
-        .from(eventsTable)
-        .where(or(eq(eventsTable.pizzaioloId, id), eq(eventsTable.crewMemberId, id))),
+      database.select({ id: assignmentsTable.id }).from(assignmentsTable).where(eq(assignmentsTable.personId, id)),
       (error) => dependencyError(error, id)
     ).map((rows) => rows.length),
   removePerson: (id: string): ResultAsync<void, DependencyError> =>

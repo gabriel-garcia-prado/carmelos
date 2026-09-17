@@ -53,8 +53,6 @@ type FormState = {
   serviceDurationMinutes: string
   rackCount: string
   setupMinutesOverride: string
-  pizzaioloId: string
-  crewMemberId: string
   fireDutyOverridePersonId: string
   requests: RequestState
 }
@@ -71,8 +69,6 @@ const defaultState = (date: string, rig: Rig): FormState => ({
   serviceDurationMinutes: '120',
   rackCount: '0',
   setupMinutesOverride: '',
-  pizzaioloId: '',
-  crewMemberId: '',
   fireDutyOverridePersonId: 'none',
   requests: emptyRequests()
 })
@@ -380,8 +376,6 @@ export const EventForm = ({ eventId, defaultDate, defaultRig, onSaved, onClose }
       rackCount: String(existing.data.rackCount),
       setupMinutesOverride:
         existing.data.setupMinutesOverride === null ? '' : String(existing.data.setupMinutesOverride),
-      pizzaioloId: existing.data.pizzaioloId,
-      crewMemberId: existing.data.crewMemberId,
       fireDutyOverridePersonId: existing.data.fireDutyOverridePersonId ?? 'none',
       requests: {
         ...emptyRequests(),
@@ -590,15 +584,9 @@ export const EventForm = ({ eventId, defaultDate, defaultRig, onSaved, onClose }
                 <Label htmlFor="rig">Rig</Label>
                 <Select
                   value={state.rig}
-                  onValueChange={(rig) => {
-                    const existingOnRig = dayEvents.data?.rigs.find((candidate) => candidate.rig === rig)?.events[0]
-                    setState((s) => ({
-                      ...s,
-                      rig: rig as Rig,
-                      pizzaioloId: existingOnRig?.pizzaioloId ?? s.pizzaioloId,
-                      crewMemberId: existingOnRig?.crewMemberId ?? s.crewMemberId
-                    }))
-                  }}
+                  // Crew isn't chosen here — a new party inherits whoever is
+                  // on the rig's latest one, and it's changed from "Edit crew".
+                  onValueChange={(rig) => setState((s) => ({ ...s, rig: rig as Rig }))}
                 >
                   <SelectTrigger id="rig">
                     <SelectValue />

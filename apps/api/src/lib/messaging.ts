@@ -23,17 +23,28 @@ export type MessageEventContext = Readonly<{
   specialRequests: readonly SpecialRequestSummary[]
 }>
 
-export type MessageRole = 'pizzaiolo' | 'crew'
+export type MessageRole = 'pizzaiolo' | 'crew' | 'cutter'
+
+export type Coworker = Readonly<{ name: string; phone: string }>
 
 export type PersonMessageInput = Readonly<{
   role: MessageRole
   arrivalTime: Date
   isLightingFire: boolean
   fireReadyTime: Date | null
-  coworkerName: string
-  coworkerPhone: string
+  /** They're making their own way to the site rather than riding out with the rig. */
+  meetsOnSite: boolean
+  /** Everyone else on this party — a stick and any cutters, or none of either. */
+  coworkers: readonly Coworker[]
   event: MessageEventContext
 }>
+
+const formatCoworkers = (coworkers: readonly Coworker[]): string | null => {
+  if (coworkers.length === 0) return null
+  const listed = coworkers.map((coworker) => `${coworker.name} (${coworker.phone})`)
+  const last = listed.pop() as string
+  return listed.length === 0 ? `With ${last}` : `With ${listed.join(', ')} and ${last}`
+}
 
 const formatRequests = (requests: readonly SpecialRequestSummary[]): string | null => {
   if (requests.length === 0) return null
@@ -47,17 +58,28 @@ export const composeEventMessage = (input: PersonMessageInput): string => {
   const lines: string[] = []
 
   lines.push(
-    input.isLightingFire && input.fireReadyTime
-      ? `${input.event.rigLabel} — in ${formatClockTime(input.arrivalTime)}, light the fire (ready ${formatClockTime(input.fireReadyTime)})`
-      : `${input.event.rigLabel} — in ${formatClockTime(input.arrivalTime)}`
+    input.meetsOnSite
+      ? `${input.event.rigLabel} — meet us at ${input.event.address}, ${formatClockTime(input.arrivalTime)} for set-up`
+      : input.isLightingFire && input.fireReadyTime
+        ? `${input.event.rigLabel} — in ${formatClockTime(input.arrivalTime)}, light the fire (ready ${formatClockTime(input.fireReadyTime)})`
+        : `${input.event.rigLabel} — in ${formatClockTime(input.arrivalTime)}`
   )
-  lines.push(`Leave ${formatClockTime(input.event.leaveTime)} · ${input.event.driveMinutes}m to ${input.event.address}`)
+  // Someone making their own way isn't on the truck's journey, so the shop
+  // departure and the drive aren't theirs to act on — where and when to be is
+  // already in the line above, and repeating an address they're driving to
+  // themselves as somewhere the truck is heading only muddies it.
+  if (!input.meetsOnSite) {
+    lines.push(
+      `Leave ${formatClockTime(input.event.leaveTime)} · ${input.event.driveMinutes}m to ${input.event.address}`
+    )
+  }
   lines.push(`First pizza ${formatClockTime(input.event.firstPizzaTime)} · ${input.event.headcount} people`)
 
   const requests = formatRequests(input.event.specialRequests)
   if (requests) lines.push(requests)
 
-  lines.push(`With ${input.coworkerName} (${input.coworkerPhone})`)
+  const coworkers = formatCoworkers(input.coworkers)
+  if (coworkers) lines.push(coworkers)
   lines.push('Reply Y to confirm')
 
   return lines.join('\n')

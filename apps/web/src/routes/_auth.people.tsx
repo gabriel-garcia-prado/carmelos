@@ -17,6 +17,7 @@ type PersonForm = Readonly<{
   name: string
   phone: string
   isPizzaiolo: boolean
+  canStick: boolean
   canDrive: boolean
   canDriveTrailer: boolean
   rackRateOverridePer30Min: string
@@ -28,6 +29,9 @@ const EMPTY_PERSON: PersonForm = {
   name: '',
   phone: '',
   isPizzaiolo: false,
+  // The one capability that defaults ON: everyone works the stick unless
+  // they're a cutter who doesn't.
+  canStick: true,
   canDrive: false,
   canDriveTrailer: false,
   rackRateOverridePer30Min: '',
@@ -37,6 +41,7 @@ const EMPTY_PERSON: PersonForm = {
 
 const CAPABILITIES = [
   ['isPizzaiolo', 'Pizzaiolo', 'Can run a rig, not just crew it.'],
+  ['canStick', 'Stick', 'Can work the peel. Uncheck for someone who only cuts.'],
   ['canDrive', 'Can drive', 'Cleared to take a truck out.'],
   ['canDriveTrailer', 'Can tow a trailer', 'Cleared for the trailer-oven trucks.']
 ] as const
@@ -64,6 +69,7 @@ const People = () => {
         name: values.name.trim(),
         phone: values.phone.trim(),
         isPizzaiolo: values.isPizzaiolo,
+        canStick: values.canStick,
         canDrive: values.canDrive,
         canDriveTrailer: values.canDriveTrailer,
         rackRateOverridePer30Min: optionalNumber(values.rackRateOverridePer30Min),
@@ -113,6 +119,7 @@ const People = () => {
       name: person.name,
       phone: person.phone ?? '',
       isPizzaiolo: person.isPizzaiolo,
+      canStick: person.canStick,
       canDrive: person.canDrive,
       canDriveTrailer: person.canDriveTrailer,
       rackRateOverridePer30Min: person.rackRateOverridePer30Min === null ? '' : String(person.rackRateOverridePer30Min),
@@ -154,6 +161,7 @@ const People = () => {
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="truncate text-sm font-medium">{person.name}</span>
                   {person.isPizzaiolo ? <Badge>Pizzaiolo</Badge> : null}
+                  {person.canStick ? null : <Badge variant="secondary">Cutter only</Badge>}
                   {person.canDrive ? <Badge variant="secondary">Driver</Badge> : null}
                   {person.canDriveTrailer ? <Badge variant="secondary">Trailer</Badge> : null}
                 </div>

@@ -30,8 +30,7 @@ export type DayEventJson = Readonly<{
   address: string
   clientName: string | null
   driveMinutes: number
-  pizzaioloId: string
-  crewMemberId: string
+  assignments: readonly AssignmentJson[]
   fireDutyOverridePersonId: string | null
   crewArrivalOverrideMinutes: number | null
   truckId: string | null
@@ -55,6 +54,21 @@ export type ConsumablesJson = Readonly<{
   trays: number
   glutenFreeDoughExtra: number
 }>
+
+export type AssignmentRoleJson = 'pizzaiolo' | 'stick' | 'cutter'
+
+/** One person on one party — see `Assignment` on the API side. */
+export type AssignmentJson = Readonly<{
+  personId: string
+  role: AssignmentRoleJson
+  meetsOnSite: boolean
+}>
+
+export const pizzaioloOf = (assignments: readonly AssignmentJson[]): AssignmentJson | undefined =>
+  assignments.find((assignment) => assignment.role === 'pizzaiolo')
+
+export const stickOf = (assignments: readonly AssignmentJson[]): AssignmentJson | undefined =>
+  assignments.find((assignment) => assignment.role === 'stick')
 
 export type RigDayJson = Readonly<{
   rig: Rig
@@ -204,15 +218,39 @@ export const crewArrivalIso = (
  * a morning, and then it's the crew member who comes in early and the
  * pizzaiolo who turns up at departure.
  */
+/**
+ * When one person is personally due at one party — the client-side mirror of
+ * `arrivalTimeFor` on the API. Someone making their own way is due on site for
+ * the start of set-up; whoever lights the fire is due at it; everyone else
+ * rides out with the rig.
+ */
+export const arrivesOnSite = (event: DayEventJson, previous: DayEventJson | undefined, personId: string): boolean => {
+  const assignment = event.assignments.find((candidate) => candidate.personId === personId)
+  if (assignment?.meetsOnSite) return true
+  if (event.computed.isFirstOfDay) return false
+  // Joining partway through the rig's day without having worked the party
+  // before it: there was no truck to ride out on.
+  return !previous?.assignments.some((seat) => seat.personId === personId)
+}
+
 export const arrivalIsoFor = (
   people: readonly PersonLike[],
   settings: SettingsLike,
   first: DayEventJson,
   fireDuty: FireDutyJson | null,
-  personId: string
+  personId: string,
+  previous?: DayEventJson
 ): string => {
-  if (fireDuty?.litByPersonId === personId) return fireDuty.litAt
-  if (fireDuty && personId === first.pizzaioloId) return fireDuty.ownArrivalTime
+  // Every branch here has to match `arrivalTimeFor` on the API, clause for
+  // clause. Missing one drew a badge fifteen minutes before a departure the
+  // person's own text put at the departure itself.
+  if (arrivesOnSite(first, previous, personId)) return first.computed.onSiteTime
+
+  const assignment = first.assignments.find((candidate) => candidate.personId === personId)
+  const isFirstOfDay = first.computed.isFirstOfDay
+  if (isFirstOfDay && fireDuty?.litByPersonId === personId) return fireDuty.litAt
+  if (!isFirstOfDay) return first.computed.leaveTime
+  if (fireDuty && assignment?.role === 'pizzaiolo') return fireDuty.ownArrivalTime
   return crewArrivalIso(people, settings, personId, first.computed.leaveTime, first.crewArrivalOverrideMinutes)
 }
 

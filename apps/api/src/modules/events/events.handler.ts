@@ -2,6 +2,7 @@ import { and, eq, gte, inArray, lt } from 'drizzle-orm'
 import { errAsync, okAsync, ResultAsync } from 'neverthrow'
 import { z } from 'zod'
 import {
+  eventAssignments as assignmentsTable,
   eventConfirmations as confirmationsTable,
   database,
   events as eventsTable,
@@ -17,6 +18,7 @@ import { addDays, parseDateKey } from '../../lib/time'
 import type { Person } from '../people/people'
 import type { Settings } from '../settings/settings'
 import type {
+  AssignmentRole,
   DeleteDependencies,
   DesiredConfirmation,
   EventRecord,
@@ -47,6 +49,12 @@ const specialRequestSchema = z.object({
   headcount: z.number().int().positive()
 })
 
+const assignmentSchema = z.object({
+  personId: z.uuid(),
+  role: z.enum(['pizzaiolo', 'stick', 'cutter']),
+  meetsOnSite: z.boolean().default(false)
+})
+
 const newEventSchema = z.object({
   rig: z.enum(RIGS as [Rig, ...Rig[]]),
   firstPizzaTime: z.coerce.date(),
@@ -58,10 +66,9 @@ const newEventSchema = z.object({
   serviceDurationMinutes: z.number().int().positive(),
   setupMinutesOverride: z.number().int().positive().nullable().default(null),
   rackCount: z.number().int().nonnegative(),
-  // Rig-owned, so optional here: omitted on create (inherited from the rig)
-  // and only ever set through the rig's own "Edit crew".
-  pizzaioloId: z.uuid().optional(),
-  crewMemberId: z.uuid().optional(),
+  // Rig-owned, so optional here: omitted on create (inherited from whoever is
+  // on the rig's latest party) and otherwise set through "Edit crew".
+  assignments: z.array(assignmentSchema).optional(),
   fireDutyOverridePersonId: z.uuid().nullable().default(null),
   crewArrivalOverrideMinutes: z.number().int().nonnegative().nullable().default(null),
   truckId: z.string().min(1).nullable().default(null),
@@ -84,8 +91,8 @@ const previewEventSchema = z.object({
 const rigCrewSchema = z.object({
   date: z.string().regex(DATE_KEY),
   rig: z.enum(RIGS as [Rig, ...Rig[]]),
-  pizzaioloId: z.uuid(),
-  crewMemberId: z.uuid(),
+  // One entry per party being changed; every entry lands in the same write.
+  parties: z.array(z.object({ eventId: z.uuid(), assignments: z.array(assignmentSchema).min(2) })).min(1),
   fireDutyOverridePersonId: z.uuid().nullable(),
   crewArrivalOverrideMinutes: z.number().int().nonnegative().nullable(),
   truckId: z.string().min(1).nullable()
@@ -104,7 +111,8 @@ const dependencyError = (error: unknown, input: unknown): DependencyError => ({
 
 const toEventRecord = (
   row: typeof eventsTable.$inferSelect,
-  requests: readonly (typeof requestsTable.$inferSelect)[]
+  requests: readonly (typeof requestsTable.$inferSelect)[],
+  assignments: readonly (typeof assignmentsTable.$inferSelect)[]
 ): EventRecord => ({
   id: row.id,
   rig: row.rig,
@@ -117,8 +125,16 @@ const toEventRecord = (
   serviceDurationMinutes: row.serviceDurationMinutes,
   setupMinutesOverride: row.setupMinutesOverride,
   rackCount: row.rackCount,
-  pizzaioloId: row.pizzaioloId,
-  crewMemberId: row.crewMemberId,
+  // Ordered so the two required seats read first however they were inserted;
+  // the board and the texts both present them in this order.
+  assignments: assignments
+    .filter((assignment) => assignment.eventId === row.id)
+    .map((assignment) => ({
+      personId: assignment.personId,
+      role: assignment.role,
+      meetsOnSite: assignment.meetsOnSite
+    }))
+    .sort((first, second) => ASSIGNMENT_ORDER.indexOf(first.role) - ASSIGNMENT_ORDER.indexOf(second.role)),
   fireDutyOverridePersonId: row.fireDutyOverridePersonId,
   crewArrivalOverrideMinutes: row.crewArrivalOverrideMinutes,
   truckId: row.truckId,
@@ -126,6 +142,8 @@ const toEventRecord = (
     .filter((request) => request.eventId === row.id)
     .map((request) => ({ requestType: request.requestType, headcount: request.headcount }))
 })
+
+const ASSIGNMENT_ORDER: readonly AssignmentRole[] = ['pizzaiolo', 'stick', 'cutter']
 
 const dateRange = (date: string) => ({ start: parseDateKey(date), endExclusive: parseDateKey(addDays(date, 1)) })
 
@@ -150,7 +168,20 @@ const fetchEventsForDate = (date: string): ResultAsync<readonly EventRecord[], D
           )
         ),
       (error) => dependencyError(error, date)
-    ).map((requests) => rows.map((row) => toEventRecord(row, requests)))
+    ).andThen((requests) =>
+      ResultAsync.fromPromise(
+        database
+          .select()
+          .from(assignmentsTable)
+          .where(
+            inArray(
+              assignmentsTable.eventId,
+              rows.map((row) => row.id)
+            )
+          ),
+        (error) => dependencyError(error, date)
+      ).map((assignments) => rows.map((row) => toEventRecord(row, requests, assignments)))
+    )
   })
 }
 
@@ -162,7 +193,12 @@ const fetchEventById = (id: string): ResultAsync<EventRecord, DependencyError> =
     return ResultAsync.fromPromise(
       database.select().from(requestsTable).where(eq(requestsTable.eventId, id)),
       (error) => dependencyError(error, id)
-    ).map((requests) => toEventRecord(row, requests))
+    ).andThen((requests) =>
+      ResultAsync.fromPromise(
+        database.select().from(assignmentsTable).where(eq(assignmentsTable.eventId, id)),
+        (error) => dependencyError(error, id)
+      ).map((assignments) => toEventRecord(row, requests, assignments))
+    )
   })
 
 const fetchSettings = (): ResultAsync<Settings, DependencyError> =>
@@ -178,8 +214,14 @@ const fetchPeople = (): ResultAsync<readonly Person[], DependencyError> =>
 const persistEvent = (event: EventRecord): ResultAsync<EventRecord, DependencyError> =>
   ResultAsync.fromPromise(
     (async () => {
-      const { specialRequests, ...row } = event
+      const { specialRequests, assignments, ...row } = event
       await database.insert(eventsTable).values(row).onConflictDoUpdate({ target: eventsTable.id, set: row })
+      // Replaced wholesale rather than diffed: the crew is small, and a
+      // half-applied change would leave a party with two pizzaiolos or none.
+      await database.delete(assignmentsTable).where(eq(assignmentsTable.eventId, event.id))
+      if (assignments.length > 0) {
+        await database.insert(assignmentsTable).values(assignments.map((seat) => ({ ...seat, eventId: event.id })))
+      }
       await database.delete(requestsTable).where(eq(requestsTable.eventId, event.id))
       if (specialRequests.length > 0) {
         await database
@@ -273,7 +315,20 @@ const readDependencies: GetDayViewDependencies & GetWeekViewDependencies = {
             )
           ),
         (error) => dependencyError(error, { startDate, endDateExclusive })
-      ).map((requests) => rows.map((row) => toEventRecord(row, requests)))
+      ).andThen((requests) =>
+        ResultAsync.fromPromise(
+          database
+            .select()
+            .from(assignmentsTable)
+            .where(
+              inArray(
+                assignmentsTable.eventId,
+                rows.map((row) => row.id)
+              )
+            ),
+          (error) => dependencyError(error, { startDate, endDateExclusive })
+        ).map((assignments) => rows.map((row) => toEventRecord(row, requests, assignments)))
+      )
     })
 }
 

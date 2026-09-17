@@ -8,7 +8,7 @@ import type { MessageEventContext } from '../../lib/messaging'
 import { composeEventMessage, composeFireDutyNote } from '../../lib/messaging'
 import type { ComputedEvent, EventForScheduling, TurnaroundStatus } from '../../lib/scheduling'
 import { computeRigDay } from '../../lib/scheduling'
-import { addDays, addMinutes, toDateKey } from '../../lib/time'
+import { addDays, addMinutes, formatClockTime, toDateKey } from '../../lib/time'
 import type { Viewer } from '../../lib/viewer'
 import { isOwner } from '../../lib/viewer'
 import type { Person } from '../people/people'
@@ -37,6 +37,30 @@ export type RequestType =
 
 export type SpecialRequest = Readonly<{ requestType: RequestType; headcount: number }>
 
+export type AssignmentRole = 'pizzaiolo' | 'stick' | 'cutter'
+
+/**
+ * One person working one party.
+ *
+ * A party needs a pizzaiolo and a stick and can carry any number of cutters on
+ * top, so this is a list rather than a fixed pair of columns — and it hangs off
+ * the event rather than the rig's day, because people get replaced halfway
+ * through it.
+ */
+export type Assignment = Readonly<{
+  personId: string
+  role: AssignmentRole
+  /** They make their own way to the site rather than riding out with the rig. */
+  meetsOnSite: boolean
+}>
+
+/** The two seats every party must fill. Cutters are extra hands on top. */
+export const pizzaioloOf = (assignments: readonly Assignment[]): Assignment | undefined =>
+  assignments.find((assignment) => assignment.role === 'pizzaiolo')
+
+export const stickOf = (assignments: readonly Assignment[]): Assignment | undefined =>
+  assignments.find((assignment) => assignment.role === 'stick')
+
 export type EventRecord = Readonly<{
   id: string
   rig: Rig
@@ -49,8 +73,7 @@ export type EventRecord = Readonly<{
   serviceDurationMinutes: number
   setupMinutesOverride: number | null
   rackCount: number
-  pizzaioloId: string
-  crewMemberId: string
+  assignments: readonly Assignment[]
   fireDutyOverridePersonId: string | null
   crewArrivalOverrideMinutes: number | null
   truckId: string | null
@@ -68,8 +91,7 @@ export type DayEventView = Readonly<{
   address: string
   clientName: string | null
   driveMinutes: number
-  pizzaioloId: string
-  crewMemberId: string
+  assignments: readonly Assignment[]
   fireDutyOverridePersonId: string | null
   crewArrivalOverrideMinutes: number | null
   truckId: string | null
@@ -114,12 +136,12 @@ export type DayView = Readonly<{
   fireDutyElsewhere: readonly OutsideFireDuty[]
 }>
 
-const resolveRackRate = (people: readonly Person[], personId: string, fallback: number): number =>
+const resolveRackRate = (people: readonly Person[], personId: string | undefined, fallback: number): number =>
   people.find((person) => person.id === personId)?.rackRateOverridePer30Min ?? fallback
 
 const resolveMinutesBeforeDeparture = (
   people: readonly Person[],
-  personId: string,
+  personId: string | undefined,
   fallback: number,
   rigOverride: number | null
 ): number => rigOverride ?? people.find((person) => person.id === personId)?.minutesBeforeDepartureOverride ?? fallback
@@ -135,6 +157,10 @@ const consumablesInputFor = (rigEvents: readonly Pick<EventRecord, 'headcount' |
       .reduce((sum, request) => sum + request.headcount, 0)
   }))
 
+// Rack minutes come off the PIZZAIOLO's rate — it measures how fast they turn
+// out pizzas, which is what the rack has to keep up with. This read the stick's
+// rate until the seats were pulled apart, which only ever agreed with the truth
+// when both had the shop default.
 const toSchedulingEvent = (event: EventRecord, people: readonly Person[], settings: Settings): EventForScheduling => ({
   id: event.id,
   firstPizzaTime: event.firstPizzaTime,
@@ -142,7 +168,7 @@ const toSchedulingEvent = (event: EventRecord, people: readonly Person[], settin
   driveMinutes: event.driveMinutes,
   driveMinutesBackToShop: event.driveMinutesBackToShop,
   rackCount: event.rackCount,
-  rackRatePer30Min: resolveRackRate(people, event.crewMemberId, settings.defaultRackRatePer30Min),
+  rackRatePer30Min: resolveRackRate(people, pizzaioloOf(event.assignments)?.personId, settings.defaultRackRatePer30Min),
   setupMinutesOverride: event.setupMinutesOverride
 })
 
@@ -182,8 +208,7 @@ export const buildDayView = (
         address: source.address,
         clientName: source.clientName,
         driveMinutes: source.driveMinutes,
-        pizzaioloId: source.pizzaioloId,
-        crewMemberId: source.crewMemberId,
+        assignments: source.assignments,
         fireDutyOverridePersonId: source.fireDutyOverridePersonId,
         crewArrivalOverrideMinutes: source.crewArrivalOverrideMinutes,
         truckId: source.truckId,
@@ -213,12 +238,14 @@ export const buildDayView = (
         leaveTime: first.computed.leaveTime,
         minutesBeforeDeparture: resolveMinutesBeforeDeparture(
           people,
-          first.crewMemberId,
+          stickOf(first.assignments)?.personId,
           settings.defaultMinutesBeforeDeparture,
           first.crewArrivalOverrideMinutes
         ),
-        defaultOpenerPersonId: first.pizzaioloId,
-        crewMemberId: first.crewMemberId,
+        // Only these two seats can hold a match — a cutter turns up for set-up,
+        // hours after the fire needed lighting.
+        defaultOpenerPersonId: pizzaioloOf(first.assignments)?.personId ?? '',
+        crewMemberId: stickOf(first.assignments)?.personId ?? '',
         overridePersonId: events.find((event) => event.id === first.id)?.fireDutyOverridePersonId ?? null
       }
     })
@@ -262,7 +289,8 @@ export const scopeDayView = (view: DayView, viewer: Viewer, settings: Consumable
   // it as a badge on their own lane — the other rig's bookings, client and
   // crew are somebody else's business.
   const rigs = view.rigs.flatMap((rigView) => {
-    const isOn = (event: DayEventView) => event.pizzaioloId === personId || event.crewMemberId === personId
+    // Any seat counts, cutters included — it's their shift too.
+    const isOn = (event: DayEventView) => event.assignments.some((assignment) => assignment.personId === personId)
     if (!rigView.events.some(isOn)) {
       return []
     }
@@ -305,10 +333,133 @@ export const scopeDayView = (view: DayView, viewer: Viewer, settings: Consumable
   }
 }
 
+/**
+ * When one person is personally due at one party — which is not always when
+ * the rig moves. Three ways in, in order of precedence:
+ *
+ * - they make their own way, so they're due on site for the start of set-up.
+ *   It's done together, which is why it's the on-site moment and not first
+ *   pizza;
+ * - they're lighting the fire, so they're due at it;
+ * - otherwise they ride out with the rig: from the shop on its first run of
+ *   the day, their own lead time before it leaves, or straight from the last
+ *   party on any run after that.
+ *
+ * Shared by the texts and the overlap check on purpose. If they disagreed, the
+ * app would tell someone to be somewhere it had already decided they couldn't
+ * be.
+ */
+export const arrivesOnSite = (
+  eventView: DayEventView,
+  previous: DayEventView | undefined,
+  assignment: Assignment
+): boolean => {
+  if (assignment.meetsOnSite) return true
+  if (eventView.computed.isFirstOfDay) return false
+  // Joining a party partway through the rig's day, having not worked the one
+  // before it: there was no truck to ride out on. It was at the last party,
+  // where this person wasn't. So they make their own way, and this is derived
+  // rather than left to the flag — a stale record or a forgotten checkbox
+  // would otherwise tell someone to be at a departure they cannot reach.
+  return !previous?.assignments.some((seat) => seat.personId === assignment.personId)
+}
+
+export const arrivalTimeFor = (
+  eventView: DayEventView,
+  previous: DayEventView | undefined,
+  fireDuty: RigFireResult | null,
+  assignment: Assignment,
+  people: readonly Person[],
+  settings: Settings
+): Date => {
+  // Set-up is done together, so it's the on-site moment and not first pizza.
+  if (arrivesOnSite(eventView, previous, assignment)) return eventView.computed.onSiteTime
+
+  const isFirstOfDay = eventView.computed.isFirstOfDay
+  if (isFirstOfDay && fireDuty !== null && fireDuty.litByPersonId === assignment.personId) return fireDuty.litAt
+  // Carrying on from the last party: the rig is already loaded and moving, so
+  // the moment it leaves is the moment.
+  if (!isFirstOfDay) return eventView.computed.leaveTime
+
+  return assignment.role === 'pizzaiolo'
+    ? (fireDuty?.ownArrivalTime ?? eventView.computed.leaveTime)
+    : addMinutes(
+        eventView.computed.leaveTime,
+        -resolveMinutesBeforeDeparture(
+          people,
+          assignment.personId,
+          settings.defaultMinutesBeforeDeparture,
+          eventView.crewArrivalOverrideMinutes
+        )
+      )
+}
+
+/**
+ * The stretch of the day one person owes to one party: from when they're due
+ * until the pack-down is finished. Leaving halfway through the day still means
+ * staying to break down, so the end is never earlier than that.
+ */
+type PersonWindow = Readonly<{ personId: string; rig: Rig; from: Date; to: Date }>
+
+const personWindows = (dayView: DayView, people: readonly Person[], settings: Settings): readonly PersonWindow[] =>
+  dayView.rigs.flatMap((rigView) =>
+    rigView.events.flatMap((eventView, index) =>
+      eventView.assignments.map((assignment) => ({
+        personId: assignment.personId,
+        rig: rigView.rig,
+        from: arrivalTimeFor(
+          eventView,
+          rigView.events[index - 1],
+          eventView.computed.isFirstOfDay ? rigView.fireDuty : null,
+          assignment,
+          people,
+          settings
+        ),
+        to: eventView.computed.breakDownFinishTime
+      }))
+    )
+  )
+
+/**
+ * Nobody can be in two places at once.
+ *
+ * This replaces a flat "already on another rig today" refusal, which ruled out
+ * the thing it was meant to allow: finishing with one rig and going out with
+ * another that leaves later is an ordinary day, and so is handing a party over
+ * to a stick who could only do the afternoon.
+ *
+ * It deliberately does NOT measure how long it takes to drive between two
+ * sites — only that the commitments don't overlap. A five-minute gap between
+ * two towns will be allowed; whoever is building the day knows the roads.
+ */
+const findPersonOverlap = (dayView: DayView, people: readonly Person[], settings: Settings): ValidationError | null => {
+  const byPerson = new Map<string, PersonWindow[]>()
+  for (const window of personWindows(dayView, people, settings)) {
+    byPerson.set(window.personId, [...(byPerson.get(window.personId) ?? []), window])
+  }
+
+  for (const [personId, windows] of byPerson) {
+    const sorted = [...windows].sort((first, second) => first.from.getTime() - second.from.getTime())
+    for (const [index, window] of sorted.entries()) {
+      const next = sorted[index + 1]
+      if (!next || next.from.getTime() >= window.to.getTime()) continue
+
+      const personName = people.find((person) => person.id === personId)?.name ?? 'That person'
+      return {
+        type: 'ValidationError',
+        message: `${personName} is on ${RIG_LABELS[window.rig]} until ${formatClockTime(window.to)} and due on ${RIG_LABELS[next.rig]} at ${formatClockTime(next.from)}. One of those has to move.`,
+        input: { personId, rigs: [window.rig, next.rig] }
+      }
+    }
+  }
+
+  return null
+}
+
 export type DesiredConfirmation = Readonly<{
   eventId: string
   personId: string
-  role: 'pizzaiolo' | 'crew' | 'fire_duty'
+  role: 'pizzaiolo' | 'crew' | 'cutter' | 'fire_duty'
   messageBody: string
 }>
 
@@ -320,13 +471,14 @@ export const computeDesiredConfirmations = (
 ): readonly DesiredConfirmation[] => {
   const nameOf = (id: string) => people.find((person) => person.id === id)?.name ?? 'Unknown'
   const phoneOf = (id: string) => people.find((person) => person.id === id)?.phone ?? ''
-  const minutesBeforeDepartureOf = (id: string, rigOverride: number | null) =>
+  const _minutesBeforeDepartureOf = (id: string, rigOverride: number | null) =>
     resolveMinutesBeforeDeparture(people, id, settings.defaultMinutesBeforeDeparture, rigOverride)
 
   const desired: DesiredConfirmation[] = []
 
   for (const rigView of dayView.rigs) {
-    for (const eventView of rigView.events) {
+    for (const [eventIndex, eventView] of rigView.events.entries()) {
+      const previousOnRig = rigView.events[eventIndex - 1]
       const isFirstOfDay = eventView.computed.isFirstOfDay
       const fireDuty = isFirstOfDay ? rigView.fireDuty : null
       const isCoveredByOther = fireDuty?.isCovered
@@ -342,54 +494,42 @@ export const computeDesiredConfirmations = (
       }
 
       // Who actually strikes the match decides who comes in early — it's the
-      // pizzaiolo most days, but the match can be handed to the crew member
-      // just as well, and then the two of them swap arrival times.
-      const pizzaioloLighting = isFirstOfDay && fireDuty !== null && fireDuty.litByPersonId === eventView.pizzaioloId
-      const crewLighting = isFirstOfDay && fireDuty !== null && fireDuty.litByPersonId === eventView.crewMemberId
-      const pizzaioloArrival = isFirstOfDay
-        ? (fireDuty?.ownArrivalTime ?? eventView.computed.leaveTime)
-        : eventView.computed.leaveTime
+      // pizzaiolo most days, but the match can be handed to the stick just as
+      // well, and then the two of them swap arrival times.
+      const lightsFire = (personId: string) => isFirstOfDay && fireDuty !== null && fireDuty.litByPersonId === personId
       const fireReadyTime = fireDuty ? addMinutes(fireDuty.litAt, settings.ovenToTempMinutes) : null
 
-      desired.push({
-        eventId: eventView.id,
-        personId: eventView.pizzaioloId,
-        role: 'pizzaiolo',
-        messageBody: composeEventMessage({
-          role: 'pizzaiolo',
-          arrivalTime: pizzaioloArrival,
-          isLightingFire: pizzaioloLighting,
-          fireReadyTime: pizzaioloLighting ? fireReadyTime : null,
-          coworkerName: nameOf(eventView.crewMemberId),
-          coworkerPhone: phoneOf(eventView.crewMemberId),
-          event: eventContext
-        })
-      })
+      const arrivalFor = (assignment: Assignment): Date =>
+        arrivalTimeFor(eventView, previousOnRig, fireDuty, assignment, people, settings)
 
-      const crewArrival =
-        crewLighting && fireDuty
-          ? fireDuty.litAt
-          : isFirstOfDay
-            ? addMinutes(
-                eventView.computed.leaveTime,
-                -minutesBeforeDepartureOf(eventView.crewMemberId, eventView.crewArrivalOverrideMinutes)
-              )
-            : eventView.computed.leaveTime
+      // 'stick' is written as 'crew' on a confirmation — the stored enum
+      // predates the seat names and renaming it would cost a data migration
+      // for no gain.
+      const confirmationRole = (role: AssignmentRole) => (role === 'stick' ? ('crew' as const) : role)
 
-      desired.push({
-        eventId: eventView.id,
-        personId: eventView.crewMemberId,
-        role: 'crew',
-        messageBody: composeEventMessage({
-          role: 'crew',
-          arrivalTime: crewArrival,
-          isLightingFire: crewLighting,
-          fireReadyTime: crewLighting ? fireReadyTime : null,
-          coworkerName: nameOf(eventView.pizzaioloId),
-          coworkerPhone: phoneOf(eventView.pizzaioloId),
-          event: eventContext
+      for (const assignment of eventView.assignments) {
+        const coworkers = eventView.assignments.filter((other) => other.personId !== assignment.personId)
+        desired.push({
+          eventId: eventView.id,
+          personId: assignment.personId,
+          role: confirmationRole(assignment.role),
+          messageBody: composeEventMessage({
+            role: confirmationRole(assignment.role),
+            arrivalTime: arrivalFor(assignment),
+            isLightingFire: lightsFire(assignment.personId),
+            fireReadyTime: lightsFire(assignment.personId) ? fireReadyTime : null,
+            meetsOnSite: arrivesOnSite(eventView, previousOnRig, assignment),
+            coworkers: coworkers.map((other) => ({
+              name: nameOf(other.personId),
+              phone: phoneOf(other.personId)
+            })),
+            event: eventContext
+          })
         })
-      })
+      }
+
+      const pizzaioloLighting = lightsFire(pizzaioloOf(eventView.assignments)?.personId ?? '')
+      const crewLighting = lightsFire(stickOf(eventView.assignments)?.personId ?? '')
 
       // The separate "also go light X" note is for someone coming from
       // ANOTHER rig. This rig's own crew member lighting its own fire already
@@ -486,8 +626,10 @@ export const previewTurnaround =
         serviceDurationMinutes: input.serviceDurationMinutes,
         setupMinutesOverride: input.setupMinutesOverride,
         rackCount: input.rackCount,
-        pizzaioloId: '',
-        crewMemberId: '',
+        // The draft is only ever scheduled, never saved or texted, so it needs
+        // no-one in its seats — the rack rate falls back to the shop default,
+        // which is the honest answer before anyone is picked.
+        assignments: [],
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null,
@@ -628,28 +770,55 @@ export type WriteDependencies = Readonly<{
 // server-side half of the rule the event form already enforces by hiding
 // those people from the pizzaiolo/crew pickers — that hiding is UX only, so
 // this is the actual gate a direct save (or a bulk crew change) can't skip.
-const findPersonConflict = (
-  dayEvents: readonly EventRecord[],
-  rig: Rig,
-  excludeEventIds: ReadonlySet<string>,
-  personIds: readonly string[],
-  people: readonly Person[]
-): ValidationError | null => {
-  const conflict = dayEvents.find(
-    (candidate) =>
-      candidate.rig !== rig &&
-      !excludeEventIds.has(candidate.id) &&
-      (personIds.includes(candidate.pizzaioloId) || personIds.includes(candidate.crewMemberId))
-  )
-  if (!conflict) return null
-
-  const conflictingPersonId = personIds.includes(conflict.pizzaioloId) ? conflict.pizzaioloId : conflict.crewMemberId
-  const personName = people.find((person) => person.id === conflictingPersonId)?.name ?? 'This person'
-  return {
+/**
+ * Every party runs with exactly one pizzaiolo and exactly one stick, plus any
+ * number of cutters. Nobody works two seats on the same party, the pizzaiolo
+ * seat needs someone who can run a rig, and the stick seat needs someone who
+ * isn't cutters-only.
+ */
+const findSeatProblem = (event: EventRecord, people: readonly Person[]): ValidationError | null => {
+  const nameOf = (id: string) => people.find((person) => person.id === id)?.name ?? 'That person'
+  const problem = (message: string): ValidationError => ({
     type: 'ValidationError',
-    message: `${personName} is already assigned to ${RIG_LABELS[conflict.rig]} today. Pick someone else, or change ${RIG_LABELS[conflict.rig]}'s crew first.`,
-    input: { conflictingEventId: conflict.id, personId: conflictingPersonId }
+    message,
+    input: { eventId: event.id }
+  })
+
+  const pizzaiolos = event.assignments.filter((assignment) => assignment.role === 'pizzaiolo')
+  const sticks = event.assignments.filter((assignment) => assignment.role === 'stick')
+
+  if (pizzaiolos.length !== 1) {
+    return problem(
+      pizzaiolos.length === 0
+        ? 'This party has no pizzaiolo. Every party needs one.'
+        : 'This party has more than one pizzaiolo. Only one runs the oven.'
+    )
   }
+  if (sticks.length !== 1) {
+    return problem(
+      sticks.length === 0
+        ? 'This party has no stick. Every party needs one.'
+        : 'This party has more than one stick. Add the extra hands as cutters instead.'
+    )
+  }
+
+  const personIds = event.assignments.map((assignment) => assignment.personId)
+  const duplicate = personIds.find((personId, index) => personIds.indexOf(personId) !== index)
+  if (duplicate) {
+    return problem(`${nameOf(duplicate)} is on this party twice. One job each.`)
+  }
+
+  const pizzaioloId = (pizzaiolos[0] as Assignment).personId
+  if (!people.find((person) => person.id === pizzaioloId)?.isPizzaiolo) {
+    return problem(`${nameOf(pizzaioloId)} isn't a pizzaiolo. Pick someone who can run a rig.`)
+  }
+
+  const stickId = (sticks[0] as Assignment).personId
+  if (!people.find((person) => person.id === stickId)?.canStick) {
+    return problem(`${nameOf(stickId)} only cuts. Put them on as a cutter and pick someone else for the stick.`)
+  }
+
+  return null
 }
 
 const saveAndSync = (dependencies: WriteDependencies, event: EventRecord): ResultAsync<EventRecord, AppError> => {
@@ -662,16 +831,17 @@ const saveAndSync = (dependencies: WriteDependencies, event: EventRecord): Resul
   ]).andThen(([existingEvents, settings, people]) => {
     const dayEvents = [...existingEvents.filter((existing) => existing.id !== event.id), event]
 
-    const personConflict = findPersonConflict(
-      dayEvents,
-      event.rig,
-      new Set([event.id]),
-      [event.pizzaioloId, event.crewMemberId],
-      people
-    )
-    if (personConflict) return errAsync(personConflict)
+    const seatProblem = findSeatProblem(event, people)
+    if (seatProblem) return errAsync(seatProblem)
 
     const dayView = buildDayView(date, dayEvents, settings, people)
+
+    // Checked against the built day, not the raw rows: a person's window
+    // depends on the times the scheduler works out, and half of them only
+    // exist once the rig's chain has been computed.
+    const overlap = findPersonOverlap(dayView, people, settings)
+    if (overlap) return errAsync(overlap)
+
     const rigDayEvents = dayView.rigs.find((rig) => rig.rig === event.rig)?.events ?? []
     // Inserting this event earlier in the rig's day reflows every event that
     // comes after it — checking only this event's own turnaround missed the
@@ -714,50 +884,54 @@ const resolveRigCrew = (
   dayEvents: readonly EventRecord[],
   rig: Rig,
   people: readonly Person[]
-): Readonly<{ pizzaioloId: string; crewMemberId: string }> | null => {
-  const existing = dayEvents.find((event) => event.rig === rig)
-  if (existing) return { pizzaioloId: existing.pizzaioloId, crewMemberId: existing.crewMemberId }
+): readonly Assignment[] | null => {
+  // Inherit the rig's LATEST party, not its first: if the crew changed partway
+  // through the day, a new party follows whoever is on it now rather than
+  // whoever started the morning.
+  const existing = [...dayEvents]
+    .filter((event) => event.rig === rig)
+    .sort((first, second) => second.firstPizzaTime.getTime() - first.firstPizzaTime.getTime())[0]
+  if (existing) return existing.assignments
 
-  const committed = new Set(dayEvents.flatMap((event) => [event.pizzaioloId, event.crewMemberId]))
+  const committed = new Set(dayEvents.flatMap((event) => event.assignments.map((seat) => seat.personId)))
   const pizzaiolo = people.find((person) => person.isPizzaiolo && !committed.has(person.id))
-  const crewMember = people.find((person) => !committed.has(person.id) && person.id !== pizzaiolo?.id)
-  return pizzaiolo && crewMember ? { pizzaioloId: pizzaiolo.id, crewMemberId: crewMember.id } : null
+  const stick = people.find((person) => person.canStick && !committed.has(person.id) && person.id !== pizzaiolo?.id)
+  return pizzaiolo && stick
+    ? [
+        { personId: pizzaiolo.id, role: 'pizzaiolo' as const, meetsOnSite: false },
+        { personId: stick.id, role: 'stick' as const, meetsOnSite: false }
+      ]
+    : null
 }
 
 /** A create payload with the rig-owned fields left out — the caller states
  * what the party is, the rig says who runs it. */
-export type NewEventInput = Omit<NewEvent, 'pizzaioloId' | 'crewMemberId'> &
-  Readonly<{ pizzaioloId?: string; crewMemberId?: string }>
+export type NewEventInput = Omit<NewEvent, 'assignments'> & Readonly<{ assignments?: readonly Assignment[] }>
 
 export const createEvent =
   (dependencies: WriteDependencies) =>
   (input: NewEventInput): ResultAsync<EventRecord, AppError> => {
-    // An explicit assignment stands on its own — only reach for the rig's
-    // crew when the caller didn't name one, so "nobody is free" can never
-    // pre-empt the real conflict checks in `saveAndSync`.
-    if (input.pizzaioloId && input.crewMemberId) {
-      const { pizzaioloId, crewMemberId } = input
-      return saveAndSync(dependencies, { id: dependencies.generateId(), ...input, pizzaioloId, crewMemberId })
+    // A named crew stands on its own — only reach for the rig's when the caller
+    // didn't give one, so "nobody is free" can never pre-empt the real checks
+    // in `saveAndSync`.
+    const named = input.assignments
+    if (named && named.length > 0) {
+      return saveAndSync(dependencies, { id: dependencies.generateId(), ...input, assignments: named })
     }
 
     const date = toDateKey(input.firstPizzaTime)
     return ResultAsync.combine([dependencies.fetchEventsForDate(date), dependencies.fetchPeople()]).andThen(
       ([dayEvents, people]) => {
-        const crew = resolveRigCrew(dayEvents, input.rig, people)
-        if (!crew) {
+        const assignments = resolveRigCrew(dayEvents, input.rig, people)
+        if (!assignments) {
           const validationError: ValidationError = {
             type: 'ValidationError',
-            message: `Nobody is free to run ${RIG_LABELS[input.rig]} — everyone is already on another rig today.`,
+            message: `Nobody is free to run ${RIG_LABELS[input.rig]} — everyone else is already on a party.`,
             input
           }
           return errAsync(validationError)
         }
-        return saveAndSync(dependencies, {
-          id: dependencies.generateId(),
-          ...input,
-          pizzaioloId: input.pizzaioloId ?? crew.pizzaioloId,
-          crewMemberId: input.crewMemberId ?? crew.crewMemberId
-        })
+        return saveAndSync(dependencies, { id: dependencies.generateId(), ...input, assignments })
       }
     )
   }
@@ -772,20 +946,28 @@ export const updateEvent =
   (input: EventUpdate): ResultAsync<EventRecord, AppError> =>
     dependencies.fetchEventById(input.id).andThen((existing) => saveAndSync(dependencies, { ...existing, ...input }))
 
+export type PartyCrew = Readonly<{ eventId: string; assignments: readonly Assignment[] }>
+
 export type RigCrewInput = Readonly<{
   date: string
   rig: Rig
-  pizzaioloId: string
-  crewMemberId: string
+  /**
+   * Who works each party on this rig, one entry per party being changed.
+   *
+   * A list rather than one crew plus an optional "just this one" flag: most
+   * days every entry is identical and it reads as a single change, but the day
+   * a stick only does the afternoon the two answers arrive together and land
+   * together. Splitting that into a call per party would let the day sit
+   * halfway between two valid states, with the overlap check passing judgement
+   * on a moment that never really existed.
+   */
+  parties: readonly PartyCrew[]
   fireDutyOverridePersonId: string | null
   crewArrivalOverrideMinutes: number | null
   truckId: string | null
 }>
 
-/** Changes the pizzaiolo/crew for every event on one rig's day at once — the
- * only way to change crew once a rig has more than one event, so the whole
- * day stays one consistent answer to "who's on this rig" instead of an
- * event-by-event form quietly forking it (spec: edit the column, not one cell). */
+/** Sets who works a rig: every party on it by default, or one named party. */
 export const updateRigCrew =
   (dependencies: WriteDependencies) =>
   (input: RigCrewInput): ResultAsync<readonly EventRecord[], AppError> =>
@@ -802,21 +984,21 @@ export const updateRigCrew =
           input
         })
       }
+      const stray = input.parties.find((party) => !rigEvents.some((event) => event.id === party.eventId))
+      if (stray) {
+        return errAsync({
+          type: 'ValidationError' as const,
+          message: `That party isn't on ${RIG_LABELS[input.rig]} today.`,
+          input
+        })
+      }
 
-      // Bringing in someone already on another rig today isn't a conflict to
-      // refuse — it's a swap. Whoever they displace here takes their seat over
-      // there, so both rigs stay staffed and nobody is on two rigs at once.
-      const current = rigEvents[0] as EventRecord
-      const swapIn = new Map<string, string>()
-      if (input.pizzaioloId !== current.pizzaioloId) swapIn.set(input.pizzaioloId, current.pizzaioloId)
-      if (input.crewMemberId !== current.crewMemberId) swapIn.set(input.crewMemberId, current.crewMemberId)
-
-      const otherRigEvents = events.filter((event) => event.rig !== input.rig)
-
-      // A truck is a physical thing — two rigs can't take the same one out.
-      // So picking a truck another rig is already on trades vehicles with it
-      // rather than double-booking it. A truck defaults to its namesake rig,
-      // so the rig id stands in when nothing is set.
+      // A truck is a physical thing — two rigs can't take the same one out. So
+      // picking a truck another rig is already on trades vehicles with it
+      // rather than double-booking it. People are no longer swapped this way:
+      // somebody can work two rigs in a day now, so bringing them in doesn't
+      // have to push anyone out. The overlap check decides whether it's
+      // possible, not a shuffle of seats.
       const earliestFor = (rig: Rig): EventRecord | undefined =>
         events
           .filter((event) => event.rig === rig)
@@ -829,56 +1011,41 @@ export const updateRigCrew =
           : undefined
       const displacedFirstId = displacedRig ? earliestFor(displacedRig)?.id : undefined
 
-      const swappedEvents = otherRigEvents
-        .filter(
-          (event) => swapIn.has(event.pizzaioloId) || swapIn.has(event.crewMemberId) || event.rig === displacedRig
-        )
+      const displacedEvents = events
+        .filter((event) => event.rig === displacedRig)
         .map((event) => ({
           ...event,
-          pizzaioloId: swapIn.get(event.pizzaioloId) ?? event.pizzaioloId,
-          crewMemberId: swapIn.get(event.crewMemberId) ?? event.crewMemberId,
-          // Only the displaced rig's own first event carries the traded
-          // truck; its later events stay null, same rule as this rig's.
-          truckId: event.id === displacedFirstId ? givingUp : event.rig === displacedRig ? null : event.truckId
+          // Only the displaced rig's own first event carries the traded truck;
+          // its later events stay null, same rule as this rig's.
+          truckId: event.id === displacedFirstId ? givingUp : null
         }))
 
-      // A swap can only go ahead if it leaves the other rig valid: a real
-      // pizzaiolo in the pizzaiolo seat, and two different people on it.
-      const nameOf = (id: string) => people.find((person) => person.id === id)?.name ?? 'That person'
-      const brokenSwap = swappedEvents.find(
-        (event) =>
-          event.pizzaioloId === event.crewMemberId ||
-          !people.find((person) => person.id === event.pizzaioloId)?.isPizzaiolo
-      )
-      if (brokenSwap) {
-        const validationError: ValidationError = {
-          type: 'ValidationError',
-          message:
-            brokenSwap.pizzaioloId === brokenSwap.crewMemberId
-              ? `That swap would put the same person on both seats of ${RIG_LABELS[brokenSwap.rig]}. Move one of them somewhere else first.`
-              : `That swap would leave ${RIG_LABELS[brokenSwap.rig]} with ${nameOf(brokenSwap.pizzaioloId)} as pizzaiolo, and they aren't one. Pick a different swap.`,
-          input
-        }
-        return errAsync(validationError)
-      }
-
-      // The override is only ever read off the day's first event for the rig
-      // (see fireInputs above) — set it there and clear it elsewhere so a
+      // The overrides are only ever read off the day's first event for the rig
+      // (see fireInputs above) — set them there and clear them elsewhere so a
       // stale value can't linger on an event that used to be first.
       const earliestEventId = [...rigEvents].sort((a, b) => a.firstPizzaTime.getTime() - b.firstPizzaTime.getTime())[0]
         ?.id
       const updatedEvents = rigEvents.map((event) => ({
         ...event,
-        pizzaioloId: input.pizzaioloId,
-        crewMemberId: input.crewMemberId,
+        assignments: input.parties.find((party) => party.eventId === event.id)?.assignments ?? event.assignments,
         fireDutyOverridePersonId: event.id === earliestEventId ? input.fireDutyOverridePersonId : null,
         crewArrivalOverrideMinutes: event.id === earliestEventId ? input.crewArrivalOverrideMinutes : null,
         truckId: event.id === earliestEventId ? input.truckId : null
       }))
 
-      // Both sides of a swap have to land together, or the day is left with
-      // the same person on two rigs.
-      const allWrites = [...updatedEvents, ...swappedEvents]
+      const seatProblem = updatedEvents.map((event) => findSeatProblem(event, people)).find(Boolean)
+      if (seatProblem) return errAsync(seatProblem)
+
+      const dayAhead = events.map(
+        (event) =>
+          updatedEvents.find((updated) => updated.id === event.id) ??
+          displacedEvents.find((displaced) => displaced.id === event.id) ??
+          event
+      )
+      const overlap = findPersonOverlap(buildDayView(input.date, dayAhead, settings, people), people, settings)
+      if (overlap) return errAsync(overlap)
+
+      const allWrites = [...updatedEvents, ...displacedEvents]
       return ResultAsync.combine(allWrites.map((event) => dependencies.persistEvent(event))).andThen((saved) => {
         const savedById = new Map(saved.map((event) => [event.id, event]))
         const dayAfter = events.map((event) => savedById.get(event.id) ?? event)

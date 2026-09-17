@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test'
 import { okAsync } from 'neverthrow'
+import { formatClockTime } from '../../lib/time'
 import type { Person } from '../people/people'
 import type { Settings } from '../settings/settings'
 import type { EventRecord, PreviewDependencies, WriteDependencies } from './events'
@@ -33,6 +34,7 @@ const SETTINGS: Settings = {
 
 const person = (overrides: Partial<Person> & { id: string; name: string; phone: string }): Person => ({
   isPizzaiolo: false,
+  canStick: true,
   canDrive: true,
   canDriveTrailer: false,
   rackRateOverridePer30Min: null,
@@ -42,10 +44,26 @@ const person = (overrides: Partial<Person> & { id: string; name: string; phone: 
 })
 
 const PEOPLE: Person[] = [
-  person({ id: 'kurt', name: 'Kurt', phone: '973 525-7887' }),
+  // Both of these run rigs in the fixtures below, so they have to be marked as
+  // pizzaiolos — the seat is validated now, where before nothing checked it.
+  person({ id: 'kurt', name: 'Kurt', phone: '973 525-7887', isPizzaiolo: true }),
   person({ id: 'leo', name: 'Leonardo', phone: '917 434-9619' }),
-  person({ id: 'gabriel', name: 'Gabriel', phone: '551 401-7502' }),
-  person({ id: 'matt', name: 'Matt', phone: '732 673-8754' })
+  person({ id: 'gabriel', name: 'Gabriel', phone: '551 401-7502', isPizzaiolo: true }),
+  person({ id: 'matt', name: 'Matt', phone: '732 673-8754' }),
+  // Cuts and nothing else, so the stick seat has to refuse her.
+  person({ id: 'ana', name: 'Ana', phone: '862 555-0148', canStick: false }),
+  person({ id: 'nick', name: 'Nick', phone: '973 248-2950' })
+]
+
+/** The same crew on every named party — what the form sends on an ordinary day. */
+const onParties = (eventIds: readonly string[], assignments: EventRecord['assignments']) =>
+  eventIds.map((eventId) => ({ eventId, assignments }))
+
+/** A party's crew: pizzaiolo, stick, then any cutters. */
+const crew = (pizzaiolo: string, stick: string, ...cutters: readonly string[]): EventRecord['assignments'] => [
+  { personId: pizzaiolo, role: 'pizzaiolo', meetsOnSite: false },
+  { personId: stick, role: 'stick', meetsOnSite: false },
+  ...cutters.map((personId) => ({ personId, role: 'cutter' as const, meetsOnSite: true }))
 ]
 
 const baseEvent = (overrides: Partial<EventRecord> & Pick<EventRecord, 'id' | 'rig'>): EventRecord => ({
@@ -58,8 +76,7 @@ const baseEvent = (overrides: Partial<EventRecord> & Pick<EventRecord, 'id' | 'r
   serviceDurationMinutes: 120,
   setupMinutesOverride: null,
   rackCount: 0,
-  pizzaioloId: 'kurt',
-  crewMemberId: 'leo',
+  assignments: crew('kurt', 'leo'),
   fireDutyOverridePersonId: null,
   crewArrivalOverrideMinutes: null,
   truckId: null,
@@ -74,8 +91,7 @@ describe('buildDayView', () => {
     firstPizzaTime: time(13),
     driveMinutes: 60,
     driveMinutesBackToShop: 25,
-    pizzaioloId: 'kurt',
-    crewMemberId: 'leo'
+    assignments: crew('kurt', 'leo')
   })
   const bigCaddy = baseEvent({
     id: 'bc1',
@@ -85,8 +101,7 @@ describe('buildDayView', () => {
     address: '412 Prospect St',
     driveMinutes: 30,
     driveMinutesBackToShop: 20,
-    pizzaioloId: 'gabriel',
-    crewMemberId: 'matt',
+    assignments: crew('gabriel', 'matt'),
     specialRequests: [{ requestType: 'gluten_free', headcount: 2 }]
   })
 
@@ -213,15 +228,13 @@ describe('createEvent', () => {
       id: 'small-caddy-1pm',
       rig: 'small_caddy',
       firstPizzaTime: time(13),
-      pizzaioloId: 'kurt',
-      crewMemberId: 'leo'
+      assignments: crew('kurt', 'leo')
     })
     const doubleBooked = baseEvent({
       id: 'new-event',
       rig: 'bus',
       firstPizzaTime: time(13),
-      pizzaioloId: 'kurt',
-      crewMemberId: 'gabriel'
+      assignments: crew('kurt', 'gabriel')
     })
 
     const persistEvent = mock((event: EventRecord) => okAsync(event))
@@ -266,8 +279,7 @@ describe('updateRigCrew', () => {
     const result = await updateRigCrew(dependencies)({
       date: '2026-08-08',
       rig: 'small_caddy',
-      pizzaioloId: 'gabriel',
-      crewMemberId: 'matt',
+      parties: onParties(['e1', 'e2'], crew('gabriel', 'matt')),
       fireDutyOverridePersonId: null,
       crewArrivalOverrideMinutes: null,
       truckId: null
@@ -276,10 +288,10 @@ describe('updateRigCrew', () => {
     expect(result.isOk()).toBe(true)
     expect(persistEvent).toHaveBeenCalledTimes(2)
     expect(persistEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'e1', pizzaioloId: 'gabriel', crewMemberId: 'matt' })
+      expect.objectContaining({ id: 'e1', assignments: crew('gabriel', 'matt') })
     )
     expect(persistEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'e2', pizzaioloId: 'gabriel', crewMemberId: 'matt' })
+      expect.objectContaining({ id: 'e2', assignments: crew('gabriel', 'matt') })
     )
   })
 
@@ -289,8 +301,7 @@ describe('updateRigCrew', () => {
       id: 'e2',
       rig: 'bus',
       firstPizzaTime: time(13),
-      pizzaioloId: 'gabriel',
-      crewMemberId: 'matt'
+      assignments: crew('gabriel', 'matt')
     })
 
     const persistEvent = mock((event: EventRecord) => okAsync(event))
@@ -306,8 +317,7 @@ describe('updateRigCrew', () => {
     const result = await updateRigCrew(dependencies)({
       date: '2026-08-08',
       rig: 'small_caddy',
-      pizzaioloId: 'gabriel',
-      crewMemberId: 'kurt',
+      parties: onParties(['e1'], crew('gabriel', 'kurt')),
       fireDutyOverridePersonId: null,
       crewArrivalOverrideMinutes: null,
       truckId: null
@@ -331,8 +341,7 @@ describe('updateRigCrew', () => {
     const result = await updateRigCrew(dependencies)({
       date: '2026-08-08',
       rig: 'bus',
-      pizzaioloId: 'gabriel',
-      crewMemberId: 'matt',
+      parties: onParties(['e1'], crew('gabriel', 'matt')),
       fireDutyOverridePersonId: null,
       crewArrivalOverrideMinutes: null,
       truckId: null
@@ -495,6 +504,231 @@ describe('previewTurnaround', () => {
   })
 })
 
+describe('a person working more than one party', () => {
+  const writeDependencies = (
+    dayEvents: readonly EventRecord[],
+    persistEvent = mock((e: EventRecord) => okAsync(e))
+  ) => ({
+    generateId: () => 'new-event',
+    fetchEventsForDate: () => okAsync(dayEvents),
+    fetchSettings: () => okAsync(SETTINGS),
+    fetchPeople: () => okAsync(PEOPLE),
+    persistEvent,
+    applyConfirmations: mock(() => okAsync(undefined))
+  })
+
+  test('finishing one rig and going out with another that leaves later is allowed', async () => {
+    // Leonardo sticks the lunchtime Small Caddy, which packs down at 3:30,
+    // then goes out on the Bus that evening. The old rule refused this flat:
+    // "already assigned to Small Caddy today".
+    const morning = baseEvent({
+      id: 'morning',
+      rig: 'small_caddy',
+      firstPizzaTime: time(13),
+      assignments: crew('kurt', 'leo')
+    })
+    const evening = baseEvent({
+      id: 'evening',
+      rig: 'bus',
+      firstPizzaTime: time(19),
+      assignments: crew('gabriel', 'leo')
+    })
+
+    const persistEvent = mock((event: EventRecord) => okAsync(event))
+    const result = await createEvent(writeDependencies([morning], persistEvent))(evening)
+
+    expect(result.isOk()).toBe(true)
+    expect(persistEvent).toHaveBeenCalled()
+  })
+
+  test('being in two places at once is refused, and the message says which two', async () => {
+    const morning = baseEvent({
+      id: 'morning',
+      rig: 'small_caddy',
+      firstPizzaTime: time(13),
+      assignments: crew('kurt', 'leo')
+    })
+    // Same afternoon, overlapping the first party's pack-down.
+    const clashing = baseEvent({
+      id: 'clashing',
+      rig: 'bus',
+      firstPizzaTime: time(14),
+      assignments: crew('gabriel', 'leo')
+    })
+
+    const persistEvent = mock((event: EventRecord) => okAsync(event))
+    const result = await createEvent(writeDependencies([morning], persistEvent))(clashing)
+
+    expect(result.isErr()).toBe(true)
+    expect(result._unsafeUnwrapErr().message).toContain('Leonardo')
+    expect(result._unsafeUnwrapErr().message).toContain('Small Caddy')
+    expect(persistEvent).not.toHaveBeenCalled()
+  })
+
+  test('someone meeting the rig on site is due for set-up, not at the shop', () => {
+    const party = baseEvent({
+      id: 'party',
+      rig: 'small_caddy',
+      firstPizzaTime: time(13),
+      assignments: [
+        { personId: 'kurt', role: 'pizzaiolo', meetsOnSite: false },
+        { personId: 'leo', role: 'stick', meetsOnSite: false },
+        { personId: 'matt', role: 'cutter', meetsOnSite: true }
+      ]
+    })
+    const dayView = buildDayView('2026-08-08', [party], SETTINGS, PEOPLE)
+    const desired = computeDesiredConfirmations(dayView, PEOPLE, SETTINGS)
+    const onSite = dayView.rigs.find((rig) => rig.rig === 'small_caddy')?.events[0]?.computed.onSiteTime
+
+    const cutterMessage = desired.find((entry) => entry.personId === 'matt')
+    expect(cutterMessage?.role).toBe('cutter')
+    // Set-up is done together, so it's the on-site moment rather than first
+    // pizza — and they're told where, not when the truck leaves the shop.
+    expect(cutterMessage?.messageBody).toContain(`meet us at ${party.address}`)
+    expect(cutterMessage?.messageBody).toContain(formatClockTime(onSite as Date))
+    expect(cutterMessage?.messageBody).not.toContain('Leave')
+  })
+
+  test('a stick who joins the later party is due for set-up, not at a departure they cannot reach', () => {
+    // Nick takes over the stick for the evening only. The rig is not at the
+    // shop when it leaves for that party - it is at the afternoon one, where
+    // Nick never was. Riding out with it isn't unusual here, it's impossible,
+    // so the on-site arrival is derived rather than left to the flag.
+    const afternoon = baseEvent({
+      id: 'afternoon',
+      rig: 'small_caddy',
+      firstPizzaTime: time(13),
+      assignments: crew('kurt', 'leo')
+    })
+    const evening = baseEvent({
+      id: 'evening',
+      rig: 'small_caddy',
+      firstPizzaTime: time(19),
+      assignments: crew('kurt', 'nick')
+    })
+
+    const dayView = buildDayView('2026-08-08', [afternoon, evening], SETTINGS, PEOPLE)
+    const rigDay = dayView.rigs.find((rig) => rig.rig === 'small_caddy')
+    const second = rigDay?.events.find((event) => event.id === 'evening')
+    const desired = computeDesiredConfirmations(dayView, PEOPLE, SETTINGS)
+
+    const toNick = desired.find((entry) => entry.personId === 'nick' && entry.eventId === 'evening')
+    expect(toNick?.messageBody).toContain(`meet us at ${evening.address}`)
+    expect(toNick?.messageBody).toContain(formatClockTime(second?.computed.onSiteTime as Date))
+    // Not the departure from the previous party's site.
+    expect(toNick?.messageBody).not.toContain('Leave')
+
+    // Kurt worked the afternoon and carries straight on, so he IS on the truck
+    // and his moment is the one it pulls away.
+    const toKurt = desired.find((entry) => entry.personId === 'kurt' && entry.eventId === 'evening')
+    expect(toKurt?.messageBody).toContain(formatClockTime(second?.computed.leaveTime as Date))
+    expect(toKurt?.messageBody).toContain('Leave')
+  })
+
+  test('everyone on the party is listed to everyone else', () => {
+    const party = baseEvent({
+      id: 'party',
+      rig: 'small_caddy',
+      assignments: [
+        { personId: 'kurt', role: 'pizzaiolo', meetsOnSite: false },
+        { personId: 'leo', role: 'stick', meetsOnSite: false },
+        { personId: 'matt', role: 'cutter', meetsOnSite: true }
+      ]
+    })
+    const desired = computeDesiredConfirmations(buildDayView('2026-08-08', [party], SETTINGS, PEOPLE), PEOPLE, SETTINGS)
+
+    const toKurt = desired.find((entry) => entry.personId === 'kurt')
+    expect(toKurt?.messageBody).toContain('Leonardo')
+    expect(toKurt?.messageBody).toContain('Matt')
+  })
+})
+
+describe('seat rules', () => {
+  const dependenciesFor = (persistEvent = mock((e: EventRecord) => okAsync(e))) => ({
+    generateId: () => 'new-event',
+    fetchEventsForDate: () => okAsync([]),
+    fetchSettings: () => okAsync(SETTINGS),
+    fetchPeople: () => okAsync(PEOPLE),
+    persistEvent,
+    applyConfirmations: mock(() => okAsync(undefined))
+  })
+
+  test.each([
+    ['no stick', [{ personId: 'kurt', role: 'pizzaiolo' as const, meetsOnSite: false }], 'no stick'],
+    [
+      'two sticks',
+      [
+        { personId: 'kurt', role: 'pizzaiolo' as const, meetsOnSite: false },
+        { personId: 'leo', role: 'stick' as const, meetsOnSite: false },
+        { personId: 'matt', role: 'stick' as const, meetsOnSite: false }
+      ],
+      'more than one stick'
+    ],
+    [
+      'the same person twice',
+      [
+        { personId: 'kurt', role: 'pizzaiolo' as const, meetsOnSite: false },
+        { personId: 'leo', role: 'stick' as const, meetsOnSite: false },
+        { personId: 'leo', role: 'cutter' as const, meetsOnSite: false }
+      ],
+      'twice'
+    ],
+    [
+      'someone who only cuts on the stick',
+      [
+        { personId: 'kurt', role: 'pizzaiolo' as const, meetsOnSite: false },
+        { personId: 'ana', role: 'stick' as const, meetsOnSite: false }
+      ],
+      'only cuts'
+    ]
+  ])('refuses %s', async (_case, assignments, expected) => {
+    const persistEvent = mock((event: EventRecord) => okAsync(event))
+    const result = await createEvent(dependenciesFor(persistEvent))(
+      baseEvent({ id: 'new-event', rig: 'bus', assignments })
+    )
+
+    expect(result.isErr()).toBe(true)
+    expect(result._unsafeUnwrapErr().message).toContain(expected)
+    expect(persistEvent).not.toHaveBeenCalled()
+  })
+
+  test('a cutter on top of the two required seats is fine', async () => {
+    const persistEvent = mock((event: EventRecord) => okAsync(event))
+    const result = await createEvent(dependenciesFor(persistEvent))(
+      baseEvent({ id: 'new-event', rig: 'bus', assignments: crew('kurt', 'leo', 'matt') })
+    )
+
+    expect(result.isOk()).toBe(true)
+    expect(persistEvent).toHaveBeenCalled()
+  })
+})
+
+describe('rack timing', () => {
+  test("follows the pizzaiolo's pace, not the stick's", () => {
+    // Rack minutes measure how fast the pizzaiolo turns pizzas out, so they
+    // have to move when the pizzaiolo changes and stay put when the stick does.
+    // This read the stick's rate until the seats were pulled apart.
+    const people = [
+      person({ id: 'quick', name: 'Quick', phone: '1', isPizzaiolo: true, rackRateOverridePer30Min: 40 }),
+      person({ id: 'slow', name: 'Slow', phone: '2', isPizzaiolo: true, rackRateOverridePer30Min: 10 }),
+      person({ id: 'stick-a', name: 'Stick A', phone: '3', rackRateOverridePer30Min: 40 }),
+      person({ id: 'stick-b', name: 'Stick B', phone: '4', rackRateOverridePer30Min: 10 })
+    ]
+    const rackMinutesFor = (pizzaiolo: string, stick: string) =>
+      buildDayView(
+        '2026-08-08',
+        [baseEvent({ id: 'e', rig: 'bus', rackCount: 40, assignments: crew(pizzaiolo, stick) })],
+        SETTINGS,
+        people
+      ).rigs.find((rig) => rig.rig === 'bus')?.events[0]?.computed.rackMinutes
+
+    expect(rackMinutesFor('quick', 'stick-a')).toBe(30)
+    expect(rackMinutesFor('slow', 'stick-a')).toBe(120)
+    // Swapping only the stick leaves the rack exactly where it was.
+    expect(rackMinutesFor('quick', 'stick-b')).toBe(30)
+  })
+})
+
 describe('scopeDayView', () => {
   const OWNER = { role: 'owner' as const, personId: null }
   const CREW = { role: 'crew' as const, personId: 'leo' }
@@ -511,8 +745,7 @@ describe('scopeDayView', () => {
           id: 'elsewhere',
           rig: 'bus',
           firstPizzaTime: time(15),
-          pizzaioloId: 'gabriel',
-          crewMemberId: 'matt',
+          assignments: crew('gabriel', 'matt'),
           clientName: 'Someone else'
         })
       ],
@@ -561,7 +794,7 @@ describe('scopeDayView', () => {
           id: 'dinner',
           rig: 'small_caddy',
           firstPizzaTime: time(19),
-          crewMemberId: 'matt',
+          assignments: crew('kurt', 'matt'),
           clientName: 'Westfield'
         })
       ],
@@ -584,8 +817,7 @@ describe('scopeDayView', () => {
           id: 'covered',
           rig: 'bus',
           firstPizzaTime: time(15),
-          pizzaioloId: 'gabriel',
-          crewMemberId: 'matt',
+          assignments: crew('gabriel', 'matt'),
           fireDutyOverridePersonId: 'leo',
           clientName: 'Bus party'
         }),
@@ -593,8 +825,7 @@ describe('scopeDayView', () => {
           id: 'later-on-bus',
           rig: 'bus',
           firstPizzaTime: time(20),
-          pizzaioloId: 'gabriel',
-          crewMemberId: 'matt',
+          assignments: crew('gabriel', 'matt'),
           clientName: 'Later bus party'
         })
       ],

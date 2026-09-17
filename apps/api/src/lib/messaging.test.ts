@@ -10,8 +10,8 @@ describe('composeEventMessage', () => {
       arrivalTime: time(9),
       isLightingFire: true,
       fireReadyTime: time(13),
-      coworkerName: 'Leonardo',
-      coworkerPhone: '917 434-9619',
+      meetsOnSite: false,
+      coworkers: [{ name: 'Leonardo', phone: '917 434-9619' }],
       event: {
         rigLabel: 'Small Caddy',
         firstPizzaTime: time(13),
@@ -39,8 +39,8 @@ describe('composeEventMessage', () => {
       arrivalTime: time(11, 15),
       isLightingFire: false,
       fireReadyTime: null,
-      coworkerName: 'Kurt',
-      coworkerPhone: '973 525-7887',
+      meetsOnSite: false,
+      coworkers: [{ name: 'Kurt', phone: '973 525-7887' }],
       event: {
         rigLabel: 'Small Caddy',
         firstPizzaTime: time(13),

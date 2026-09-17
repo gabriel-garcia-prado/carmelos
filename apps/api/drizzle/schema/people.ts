@@ -11,6 +11,11 @@ export const people = pgTable('people', {
   name: text().notNull(),
   phone: text().notNull(),
   isPizzaiolo: boolean().notNull().default(false),
+  // The one capability that says someone can do LESS, so it defaults true:
+  // everyone works the stick unless they're a cutter who doesn't. The other
+  // flags mark what a person can do on top of the baseline; this one carves
+  // out of it.
+  canStick: boolean().notNull().default(true),
   // Who can move a truck at all, and who's cleared to tow a trailer oven.
   // Both default false: driving is a specific thing Billy signs off on, not
   // something to assume of a new casual hire.
