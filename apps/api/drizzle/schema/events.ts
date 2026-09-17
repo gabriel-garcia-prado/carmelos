@@ -44,12 +44,9 @@ export const events = pgTable('events', {
   setupMinutesOverride: integer(),
   rackCount: integer().notNull().default(0),
 
-  pizzaioloId: uuid()
-    .notNull()
-    .references(() => people.id),
-  crewMemberId: uuid()
-    .notNull()
-    .references(() => people.id),
+  // Who works this party lives in `event_assignments` — a party needs a
+  // pizzaiolo and a stick, plus any number of cutters, and the people on it
+  // can differ from the ones on this rig's other party the same day.
   // Escape hatch for the fire-duty optimizer (spec §8: every derived time
   // must remain overridable). Set to pin who lights this rig's fire instead
   // of trusting the auto-assignment.

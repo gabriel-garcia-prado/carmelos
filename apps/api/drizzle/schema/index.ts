@@ -1,3 +1,4 @@
+export * from './assignments'
 export * from './auth'
 export * from './confirmations'
 export * from './events'

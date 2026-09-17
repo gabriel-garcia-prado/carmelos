@@ -1,9 +1,9 @@
 import { Pencil } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { TrafficBadge, WeatherBadges } from '@/components/event-status-badges'
 import { diffMinutes, initialsOf } from '@/lib/board-time'
-import type { DayViewJson, PersonLike, RigDayJson, SettingsLike, Turnaround } from '@/lib/day-blocks'
+import type { AssignmentJson, DayViewJson, PersonLike, RigDayJson, SettingsLike, Turnaround } from '@/lib/day-blocks'
 import {
   arrivalIsoFor,
   blockStyle,
@@ -12,9 +12,11 @@ import {
   computeDayWindow,
   labelMaskFor,
   legendSwatch,
-  nameOf
+  nameOf,
+  pizzaioloOf,
+  stickOf
 } from '@/lib/day-blocks'
-import { formatClockTime, formatLaneTime, toDateKey } from '@/lib/format'
+import { formatLaneTime, toDateKey } from '@/lib/format'
 import type { Rig } from '@/lib/rigs'
 import { RIGS } from '@/lib/rigs'
 
@@ -52,6 +54,8 @@ type MomentBadge = Readonly<{
   top: number
   label: string
   hasFire: boolean
+  /** The whole name, for the pinned chips — trimmed to fit at render time. */
+  fullName?: string
   tone: 'pizzaiolo' | 'crew' | 'away'
   /** Shown only in the expanded lane — true only for the other-rig fire tags,
    * where the flame alone still says "there's another fire on the way in" and
@@ -69,6 +73,43 @@ const BADGE_BASE =
   'flex items-center justify-center gap-0.5 overflow-hidden whitespace-nowrap rounded-full font-mono font-semibold'
 
 const badgeSize = (compact: boolean): string => (compact ? 'h-4 min-w-4 px-0.5 text-[7px]' : 'px-1.5 py-0.5 text-[8px]')
+
+/**
+ * Everyone working a rig today, in seat order, each person once.
+ *
+ * A rig no longer has one crew for the whole day — a stick can be replaced at
+ * lunchtime — so the header answers "who's on this rig" with the union rather
+ * than with whichever party happens to be first.
+ */
+const dedupeBySeat = (events: readonly RigDayJson['events'][number][]): readonly AssignmentJson[] => {
+  const order: readonly AssignmentJson['role'][] = ['pizzaiolo', 'stick', 'cutter']
+  const seen = new Map<string, AssignmentJson>()
+  for (const event of events) {
+    for (const assignment of event.assignments) {
+      if (!seen.has(assignment.personId)) seen.set(assignment.personId, assignment)
+    }
+  }
+  return [...seen.values()].sort((first, second) => order.indexOf(first.role) - order.indexOf(second.role))
+}
+
+/**
+ * As much of a name as the space can hold: all of it, a shortened form, or
+ * just the initials.
+ *
+ * The widths are estimates off the mono font's advance — 4.2px a character at
+ * 7px, 4.9px at 8px — because measuring every candidate string per render to
+ * get the exact answer costs a layout pass for a chip a centimetre wide. Being
+ * a few pixels pessimistic only means falling back a tier early.
+ */
+const fitName = (name: string, budgetPx: number, compact: boolean): string => {
+  const charPx = compact ? 4.2 : 4.9
+  const room = Math.floor(budgetPx / charPx)
+  if (room >= name.length) return name
+  // Below four characters an abbreviation says less than the initials do, and
+  // costs the ellipsis to say it.
+  if (room >= 4) return `${name.slice(0, room - 1)}…`
+  return initialsOf(name)
+}
 
 const badgeTone = (tone: MomentBadge['tone']): string =>
   tone === 'pizzaiolo'
@@ -136,6 +177,20 @@ export const DayBoard = ({
   expandSoleRig
 }: DayBoardProperties) => {
   const [chosenRig, setChosenRig] = useState<Rig | null>(null)
+
+  // Lane widths are percentages, and a name has to be fitted in pixels, so the
+  // board measures itself once and on resize. Zero until the first measurement
+  // lands, which `fitName` reads as "no idea yet" and answers with initials —
+  // the safe end, since a too-long name is what breaks the row.
+  const lanesRef = useRef<HTMLDivElement>(null)
+  const [lanesWidth, setLanesWidth] = useState(0)
+  useEffect(() => {
+    const element = lanesRef.current
+    if (!element) return
+    const observer = new ResizeObserver((entries) => setLanesWidth(entries[0]?.contentRect.width ?? 0))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   // Read once at mount and then on every minute boundary, so a board left open
   // doesn't keep pointing at whatever o'clock it happened to load at. Aligned
@@ -208,7 +263,10 @@ export const DayBoard = ({
   return (
     <div className="w-full space-y-2 rounded-lg border bg-card p-3 sm:p-4">
       {/* Lane headers */}
-      <div className="flex" style={{ height: HEADER_HEIGHT }}>
+      {/* A floor, not a fixed height: a rig running three or four hands wraps
+          its chips onto a second line, and a fixed header let that line spill
+          out of the bottom and land on the first badge row in the lane below. */}
+      <div className="relative flex" style={{ minHeight: HEADER_HEIGHT }}>
         <div className="relative flex-1">
           {ordered.map((rig) => {
             const offset = offsets.get(rig.rig)
@@ -223,8 +281,11 @@ export const DayBoard = ({
               return worst
             }, null)
             const hasStar = rig.events.some((event) => event.specialRequests.length > 0)
-            const pizzaioloId = rig.events[0]?.pizzaioloId
-            const crewMemberId = rig.events[0]?.crewMemberId
+            // Everyone who works this rig today, in seat order, first
+            // appearance wins. The union rather than one party's crew: with a
+            // stick who only does the afternoon, no single party answers "who's
+            // on this rig".
+            const crewToday = dedupeBySeat(rig.events)
             // The lane is titled by the vehicle it's actually taking out, not
             // by the rig slot — that's what the crew turns up to, and it makes
             // a truck swap read straight off the two headers with no subtitle.
@@ -267,7 +328,7 @@ export const DayBoard = ({
                   // right inset — so a rig is one continuous column.
                   left: `calc(${offset.leftPct}% + ${isCollapsed || isIdle ? BLOCK_INSET : TIME_GUTTER}px)`,
                   width: `calc(${offset.widthPct}% - ${BLOCK_INSET + (isCollapsed || isIdle ? BLOCK_INSET : TIME_GUTTER)}px)`,
-                  height: HEADER_HEIGHT,
+                  minHeight: HEADER_HEIGHT,
                   ...(isIdle ? {} : { backgroundColor: 'var(--primary)', color: 'var(--primary-foreground)' })
                 }}
               >
@@ -279,16 +340,18 @@ export const DayBoard = ({
                   <div className="flex h-full flex-col items-center justify-center gap-0.5">
                     <span className="text-[9px] font-semibold">{laneShortLabel}</span>
                     <div className="flex items-center gap-0.5">
-                      {pizzaioloId ? (
-                        <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-card text-[6px] font-semibold text-foreground ring-1 ring-inset ring-foreground">
-                          {initialsOf(nameOf(people, pizzaioloId))}
+                      {crewToday.map((assignment) => (
+                        <span
+                          key={assignment.personId}
+                          className={`flex h-3.5 w-3.5 items-center justify-center rounded-full text-[6px] font-semibold ${
+                            assignment.role === 'pizzaiolo'
+                              ? 'bg-card text-foreground ring-1 ring-inset ring-foreground'
+                              : 'bg-foreground text-background ring-1 ring-inset ring-background'
+                          }`}
+                        >
+                          {initialsOf(nameOf(people, assignment.personId))}
                         </span>
-                      ) : null}
-                      {crewMemberId ? (
-                        <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-foreground text-[6px] font-semibold text-background ring-1 ring-inset ring-background">
-                          {initialsOf(nameOf(people, crewMemberId))}
-                        </span>
-                      ) : null}
+                      ))}
                     </div>
                   </div>
                 ) : (
@@ -319,21 +382,31 @@ export const DayBoard = ({
                       {hasStar ? <span className="text-primary-foreground">★</span> : null}
                       <span className="truncate">{laneLabel}</span>
                     </div>
-                    <div className="mt-0.5 flex items-center justify-center gap-1 normal-case">
-                      {pizzaioloId ? (
-                        // Pizzaiolo is always the solid chip; the crew is the
-                        // outlined opposite. Fire coverage is conveyed on the
-                        // timeline, not by dimming the header badge (which made
-                        // it indistinguishable from the crew's outlined chip).
-                        <span className="truncate rounded-full bg-card px-1.5 py-0.5 text-[8px] font-semibold text-foreground ring-1 ring-inset ring-foreground">
-                          {nameOf(people, pizzaioloId)}
+                    <div className="mt-0.5 flex min-w-0 flex-nowrap items-center justify-center gap-1 normal-case">
+                      {/* Pizzaiolo is the solid chip; everyone else is the
+                          outlined opposite. Fire coverage is conveyed on the
+                          timeline, not by dimming a header badge (which made it
+                          indistinguishable from the stick's outlined chip).
+
+                          One line, truncating, rather than wrapping. The header
+                          is a fixed height with absolutely-positioned lanes
+                          inside it, so a wrapped second line can't push it
+                          taller — it spills out of the bottom and lands on the
+                          first badge row in the lane below, hiding whoever is
+                          on it. A shortened name is recoverable; a name sitting
+                          underneath a badge just looks like a rendering fault. */}
+                      {crewToday.map((assignment) => (
+                        <span
+                          key={assignment.personId}
+                          className={`min-w-0 truncate rounded-full px-1.5 py-0.5 text-[8px] font-semibold ${
+                            assignment.role === 'pizzaiolo'
+                              ? 'bg-card text-foreground ring-1 ring-inset ring-foreground'
+                              : 'bg-foreground text-background ring-1 ring-inset ring-background'
+                          }`}
+                        >
+                          {nameOf(people, assignment.personId)}
                         </span>
-                      ) : null}
-                      {crewMemberId ? (
-                        <span className="truncate rounded-full bg-foreground px-1.5 py-0.5 text-[8px] font-semibold text-background ring-1 ring-inset ring-background">
-                          {nameOf(people, crewMemberId)}
-                        </span>
-                      ) : null}
+                      ))}
                     </div>
                   </>
                 )}
@@ -347,7 +420,7 @@ export const DayBoard = ({
           clock time at each of its own block seams, which is the thing those
           were there to let you read. */}
       <div className="flex" style={{ height: boardHeight }}>
-        <div className="relative flex-1">
+        <div className="relative flex-1" ref={lanesRef}>
           {/* In front of the block fills, behind everything written on them.
               Drawn first in the lanes' own stacking context and lifted with a
               z-index rather than moved later in the DOM: paint order alone
@@ -411,24 +484,13 @@ export const DayBoard = ({
               ]
             })
 
-            const pizzaioloId = rig.events[0]?.pizzaioloId
-            const crewMemberId = rig.events[0]?.crewMemberId
-            // One rule for both of them: whoever lights this rig's fire is
-            // due at the fire, the other at departure-minus-lead-time.
-            const pizzaioloArrivalIso =
-              rig.events[0] && pizzaioloId
-                ? arrivalIsoFor(people, settings, rig.events[0], rig.fireDuty, pizzaioloId)
-                : undefined
-            const crewArrivalAtIso =
-              rig.events[0] && crewMemberId
-                ? arrivalIsoFor(people, settings, rig.events[0], rig.fireDuty, crewMemberId)
-                : undefined
-            // Always two circles, one per person — even when they arrive at
-            // the exact same moment they stay separate chips side by side
-            // rather than merging into one label, so it's always clear who's
-            // who.
-            const labelFor = (personId: string) =>
-              isExpanded ? nameOf(people, personId) : initialsOf(nameOf(people, personId))
+            const firstEvent = rig.events[0]
+            const pizzaioloId = firstEvent ? pizzaioloOf(firstEvent.assignments)?.personId : undefined
+            const crewMemberId = firstEvent ? stickOf(firstEvent.assignments)?.personId : undefined
+            // One circle per person — even when two arrive at the same moment
+            // they stay separate chips side by side rather than merging into
+            // one label, so it's always clear who's who.
+            const labelFor = (personId: string) => nameOf(people, personId)
             // When this rig's own pizzaiolo lights their own fire, their
             // arrival IS the fire-lighting moment — one badge (name + 🔥),
             // not a separate fire pill sitting right on top of their circle.
@@ -442,29 +504,51 @@ export const DayBoard = ({
             const pizzaioloLightsOwnFire = Boolean(rig.fireDuty) && rig.fireDuty?.litByPersonId === pizzaioloId
             const crewLightsOwnFire = Boolean(rig.fireDuty) && rig.fireDuty?.litByPersonId === crewMemberId
             const litByOwnCrew = pizzaioloLightsOwnFire || crewLightsOwnFire
-            const arrivals =
-              rig.fireDuty && pizzaioloId && crewMemberId && pizzaioloArrivalIso && crewArrivalAtIso
-                ? [
-                    {
-                      key: 'pizzaiolo',
-                      atIso: pizzaioloArrivalIso,
-                      label: labelFor(pizzaioloId),
-                      // Pizzaiolo is always the solid chip, crew always the
-                      // outlined one — same rule as the header badge, and
-                      // for the same reason: fire coverage is conveyed by
-                      // the red dot/pill, not by which one looks "filled."
-                      filled: true,
-                      hasFire: pizzaioloLightsOwnFire
-                    },
-                    {
-                      key: 'crew',
-                      atIso: crewArrivalAtIso,
-                      label: labelFor(crewMemberId),
-                      filled: false,
-                      hasFire: crewLightsOwnFire
-                    }
-                  ]
-                : []
+            /**
+             * One badge per person, at the first moment they're personally
+             * due on this rig.
+             *
+             * Keyed by person rather than by seat, because a stick who works
+             * both parties arrives once — a second badge at the later party
+             * would read as a second trip in. Someone who joins only for the
+             * afternoon gets theirs at their own hour, which is the whole
+             * point of tracking arrivals per person.
+             *
+             * The pizzaiolo is the solid chip and everyone else outlined —
+             * fire coverage is conveyed by the red pill, not by which one
+             * looks "filled".
+             */
+            const arrivals = rig.fireDuty
+              ? [
+                  ...rig.events
+                    .flatMap((event, index) =>
+                      event.assignments.map((assignment) => ({
+                        assignment,
+                        atIso: arrivalIsoFor(
+                          people,
+                          settings,
+                          event,
+                          rig.fireDuty,
+                          assignment.personId,
+                          rig.events[index - 1]
+                        )
+                      }))
+                    )
+                    .sort((first, second) => first.atIso.localeCompare(second.atIso))
+                    .reduce((earliest, entry) => {
+                      if (earliest.has(entry.assignment.personId)) return earliest
+                      earliest.set(entry.assignment.personId, entry)
+                      return earliest
+                    }, new Map<string, { assignment: AssignmentJson; atIso: string }>())
+                    .values()
+                ].map(({ assignment, atIso }) => ({
+                  key: assignment.personId,
+                  atIso,
+                  label: labelFor(assignment.personId),
+                  filled: assignment.role === 'pizzaiolo',
+                  hasFire: rig.fireDuty?.litByPersonId === assignment.personId
+                }))
+              : []
 
             // Who lit this rig's fire — only shown as its own (all-red) pill
             // when someone from ANOTHER rig covered it; when this rig's own
@@ -491,7 +575,8 @@ export const DayBoard = ({
                   other.fireDuty &&
                   other.fireDuty.litByPersonId === rig.fireDuty?.litByPersonId &&
                   // ...and it isn't simply that rig's own pizzaiolo doing it.
-                  other.fireDuty.litByPersonId !== other.events[0]?.pizzaioloId
+                  other.fireDuty.litByPersonId !==
+                    (other.events[0] && pizzaioloOf(other.events[0].assignments)?.personId)
                     ? [
                         {
                           rig: other.rig,
@@ -505,7 +590,8 @@ export const DayBoard = ({
                             other.label
                           ),
                           top: minutesFromStart(other.fireDuty.litAt) * PX_PER_MIN,
-                          atIso: other.fireDuty.litAt
+                          atIso: other.fireDuty.litAt,
+                          personId: other.fireDuty.litByPersonId
                         }
                       ]
                     : []
@@ -525,7 +611,8 @@ export const DayBoard = ({
                         duty.label
                       ),
                       top: minutesFromStart(duty.litAt) * PX_PER_MIN,
-                      atIso: duty.litAt
+                      atIso: duty.litAt,
+                      personId: duty.litByPersonId
                     }
                   ]
                 : []
@@ -550,15 +637,22 @@ export const DayBoard = ({
             // landing on one minute is routine once fires get bundled — so
             // they're laid out together rather than as three passes that each
             // assumed they had the moment to themselves.
+            const awayTags = [...alsoLights, ...alsoLightsElsewhere]
+            const sameMoment = (first: number, second: number) => Math.round(first) === Math.round(second)
+
             const momentBadges: MomentBadge[] = [
-              ...arrivals.map((arrival) => ({
-                key: arrival.key,
-                top: minutesFromStart(arrival.atIso) * PX_PER_MIN,
-                label: arrival.label,
-                hasFire: arrival.hasFire,
-                tone: arrival.filled ? ('pizzaiolo' as const) : ('crew' as const),
-                labelOptional: false
-              })),
+              ...arrivals.map((arrival) => {
+                const top = minutesFromStart(arrival.atIso) * PX_PER_MIN
+                return {
+                  key: arrival.key,
+                  top,
+                  label: arrival.label,
+                  fullName: arrival.label,
+                  hasFire: arrival.hasFire,
+                  tone: arrival.filled ? ('pizzaiolo' as const) : ('crew' as const),
+                  labelOptional: false
+                }
+              }),
               ...(fireBadge
                 ? [
                     {
@@ -573,7 +667,7 @@ export const DayBoard = ({
                     }
                   ]
                 : []),
-              ...[...alsoLights, ...alsoLightsElsewhere].map((tag) => ({
+              ...awayTags.map((tag) => ({
                 key: `also-${tag.rig}`,
                 top: tag.top,
                 label: tag.label,
@@ -605,14 +699,29 @@ export const DayBoard = ({
             // Same moment means the same row, sitting side by side. Rows that
             // would still overlap after that are pushed down in time order, so
             // a badge is never hidden behind another.
+            /**
+             * Moments close enough to collide share one row, side by side.
+             *
+             * Height on this lane means time, so a badge shunted downwards to
+             * dodge another is reading as a later hour than the one it belongs
+             * to — which is worse than sharing. Anything within a row's height
+             * of the cluster it starts therefore joins it, and the row sits at
+             * the average of the moments in it. The exact clock readings are in
+             * the gutter either way: every badge moment is fed to
+             * `buildBoundaries`, so a cluster is bracketed by its own times.
+             */
             const badgeRows = [...new Set(momentBadges.map((badge) => badge.top))]
               .sort((first, second) => first - second)
-              .reduce<{ top: number; badges: MomentBadge[] }[]>((rows, top) => {
-                const previous = rows[rows.length - 1]
-                const lowestFree = previous ? previous.top + BADGE_ROW_HEIGHT : Number.NEGATIVE_INFINITY
-                rows.push({ top: Math.max(top, lowestFree), badges: momentBadges.filter((b) => b.top === top) })
-                return rows
+              .reduce<number[][]>((clusters, top) => {
+                const current = clusters[clusters.length - 1]
+                if (current && top - (current[0] as number) < BADGE_ROW_HEIGHT) current.push(top)
+                else clusters.push([top])
+                return clusters
               }, [])
+              .map((tops) => ({
+                top: tops.reduce((sum, top) => sum + top, 0) / tops.length,
+                badges: momentBadges.filter((badge) => tops.includes(badge.top))
+              }))
 
             return (
               // biome-ignore lint/a11y/useSemanticElements: needs to contain nested <button>s (edit icons), which a real <button> can't do
@@ -633,6 +742,10 @@ export const DayBoard = ({
                   const sourceEvent = block.eventId ? sortedEvents.find((event) => event.id === block.eventId) : null
                   const hasStar = block.kind === 'serve' && Boolean(sourceEvent?.specialRequests.length)
                   const labelMask = labelMaskFor(block.kind)
+                  // Wrapping costs a line, so it's only on offer where there's
+                  // a line spare. 32px is the measured two-line height, the
+                  // same figure the detail row below is gated on.
+                  const canWrapLabel = block.height * PX_PER_MIN >= 32
 
                   return (
                     <div
@@ -660,23 +773,35 @@ export const DayBoard = ({
                     >
                       {!isCollapsed && block.height * PX_PER_MIN >= (isExpanded ? 11 : 14) ? (
                         // Positioned only to earn a z-index, so the current-time
-                        // rule passes behind the writing on the block.
-                        <div className="relative z-20">
-                          {/* Name and duration share a line: the duration used
-                              to cost a whole row of its own, which on a short
-                              block meant showing "Drive" and having no room
-                              left to say how long it was — the one thing the
-                              block is there to answer.
+                        // rule passes behind the writing on the block — and
+                        // deaf to the mouse, because that z-index also lifts it
+                        // over the block's own edit pencil and traffic link,
+                        // which carry none. Nothing in here is clickable, so
+                        // letting clicks through costs nothing and means a
+                        // control added to a block later can't be swallowed by
+                        // a label sitting on top of it.
+                        <div className="pointer-events-none relative z-20">
+                          {/* Name and duration share a line where they fit: the
+                              duration used to cost a whole row of its own,
+                              which on a short block meant showing "Drive" and
+                              having no room left to say how long it was — the
+                              one thing the block is there to answer.
 
-                              The name truncates and the duration doesn't. If
-                              the lane is too narrow for both, losing the end of
-                              a client's name still leaves a legible block,
-                              whereas a half-eaten "1h 2…" is worse than
-                              nothing. Inline, not an absolute overlay — this
-                              box clips overflow, and an overlay star sat on top
-                              of the label's own first letter. */}
-                          <div className="flex items-baseline gap-1 font-semibold">
-                            <span className={`${labelMask} min-w-0`}>
+                              Where they don't fit, the duration drops to the
+                              next line rather than the name being eaten to make
+                              room. That needs a second line's worth of height,
+                              so a block too short for one keeps the old
+                              behaviour: hold one line and shrink the name.
+
+                              Inline, not an absolute overlay — this box clips
+                              overflow, and an overlay star sat on top of the
+                              label's own first letter. */}
+                          <div
+                            className={`flex items-baseline gap-1 font-semibold ${
+                              canWrapLabel ? 'flex-wrap' : 'flex-nowrap'
+                            }`}
+                          >
+                            <span className={`${labelMask} ${canWrapLabel ? 'max-w-full' : 'min-w-0'}`}>
                               {hasStar ? '★ ' : ''}
                               {block.label}
                             </span>
@@ -800,6 +925,15 @@ export const DayBoard = ({
                   // The other-rig fire tags are laid out as their own cluster,
                   // because several of them collapse into a single marker.
                   const pinned = row.badges.filter((badge) => !badge.labelOptional)
+                  // What one chip may occupy: the lane's own width less its
+                  // gutter and insets, shared between everything on this row,
+                  // less the flame and the chip's own padding.
+                  const lanePx = (offset.widthPct / 100) * lanesWidth
+                  const rowPx = Math.max(
+                    0,
+                    lanePx - (isCollapsed ? BLOCK_INSET * 2 : TIME_GUTTER + BLOCK_INSET) - row.badges.length * 4
+                  )
+                  const chipPx = rowPx / Math.max(1, row.badges.length)
                   const away = row.badges.filter((badge) => badge.labelOptional)
                   // Two or three flames in a row ate the whole lane and wrapped
                   // onto a second line. Until the lane is opened they read as
@@ -820,7 +954,13 @@ export const DayBoard = ({
                           key={badge.key}
                           className={`${BADGE_BASE} ${badgeSize(isCollapsed)} ${badgeTone(badge.tone)}`}
                         >
-                          {badge.label}
+                          {badge.fullName
+                            ? fitName(
+                                badge.fullName,
+                                chipPx - (isCollapsed ? 4 : 12) - (badge.hasFire ? 11 : 0),
+                                isCollapsed
+                              )
+                            : badge.label}
                           {badge.hasFire ? <span className={isCollapsed ? 'text-[7px]' : 'text-[8px]'}>🔥</span> : null}
                         </span>
                       ))}

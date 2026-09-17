@@ -7,7 +7,17 @@
  * what sign-in expects.
  */
 import { eq } from 'drizzle-orm'
-import { database, eventConfirmations, eventSpecialRequests, events, people, settings, trucks, user } from '#database'
+import {
+  database,
+  eventAssignments,
+  eventConfirmations,
+  eventSpecialRequests,
+  events,
+  people,
+  settings,
+  trucks,
+  user
+} from '#database'
 import { auth } from '../../src/modules/auth/auth'
 import type { EventRecord } from '../../src/modules/events/events'
 import { buildDayView, computeDesiredConfirmations } from '../../src/modules/events/events'
@@ -55,14 +65,23 @@ const DEFAULT_SETTINGS = {
 // isPizzaiolo marks who can also run a rig — the people actually assigned
 // as pizzaiolo across the seeded reference events below.
 const CREW = [
-  { name: 'Gabriel', phone: '551 401-7502', isPizzaiolo: true, canDrive: true, canDriveTrailer: true },
-  { name: 'Kurt', phone: '973 525-7887', isPizzaiolo: true, canDrive: true, canDriveTrailer: true },
-  { name: 'Leonardo', phone: '917 434-9619', isPizzaiolo: false, canDrive: true, canDriveTrailer: false },
-  { name: 'EJ', phone: '201 575-2176', isPizzaiolo: true, canDrive: true, canDriveTrailer: false },
-  { name: 'Nick', phone: '973 248-2950', isPizzaiolo: false, canDrive: false, canDriveTrailer: false },
-  { name: 'Sam', phone: '929 316-7237', isPizzaiolo: true, canDrive: true, canDriveTrailer: false },
-  { name: 'Matt', phone: '732 673-8754', isPizzaiolo: false, canDrive: true, canDriveTrailer: false },
-  { name: 'John', phone: '973 800-7415', isPizzaiolo: false, canDrive: false, canDriveTrailer: false }
+  { name: 'Gabriel', phone: '551 401-7502', isPizzaiolo: true, canStick: true, canDrive: true, canDriveTrailer: true },
+  { name: 'Kurt', phone: '973 525-7887', isPizzaiolo: true, canStick: true, canDrive: true, canDriveTrailer: true },
+  {
+    name: 'Leonardo',
+    phone: '917 434-9619',
+    isPizzaiolo: false,
+    canStick: true,
+    canDrive: true,
+    canDriveTrailer: false
+  },
+  { name: 'EJ', phone: '201 575-2176', isPizzaiolo: true, canStick: true, canDrive: true, canDriveTrailer: false },
+  { name: 'Nick', phone: '973 248-2950', isPizzaiolo: false, canStick: true, canDrive: false, canDriveTrailer: false },
+  { name: 'Sam', phone: '929 316-7237', isPizzaiolo: true, canStick: true, canDrive: true, canDriveTrailer: false },
+  { name: 'Matt', phone: '732 673-8754', isPizzaiolo: false, canStick: true, canDrive: true, canDriveTrailer: false },
+  { name: 'John', phone: '973 800-7415', isPizzaiolo: false, canStick: true, canDrive: false, canDriveTrailer: false },
+  // Cuts and nothing else — the one person the stick seat has to refuse.
+  { name: 'Ana', phone: '862 555-0148', isPizzaiolo: false, canStick: false, canDrive: true, canDriveTrailer: false }
 ]
 
 if (process.env.NODE_ENV === 'production') {
@@ -130,6 +149,7 @@ if (newCrew.length === 0) {
       name: person.name,
       phone: person.phone,
       isPizzaiolo: person.isPizzaiolo,
+      canStick: person.canStick,
       canDrive: person.canDrive,
       canDriveTrailer: person.canDriveTrailer,
       rackRateOverridePer30Min: null,
@@ -147,6 +167,7 @@ for (const person of CREW) {
     .update(people)
     .set({
       isPizzaiolo: person.isPizzaiolo,
+      canStick: person.canStick,
       canDrive: person.canDrive,
       canDriveTrailer: person.canDriveTrailer
     })
@@ -250,6 +271,19 @@ await database.delete(events)
     return found.id
   }
 
+  /**
+   * The crew for one party: a pizzaiolo, a stick, and any cutters after them.
+   *
+   * Cutters default to making their own way — they're due on site for set-up
+   * rather than at the shop, which is how the extra pair of hands usually
+   * turns up.
+   */
+  const crew = (pizzaiolo: string, stick: string, ...cutters: readonly string[]): EventRecord['assignments'] => [
+    { personId: idOf(pizzaiolo), role: 'pizzaiolo', meetsOnSite: false },
+    { personId: idOf(stick), role: 'stick', meetsOnSite: false },
+    ...cutters.map((name) => ({ personId: idOf(name), role: 'cutter' as const, meetsOnSite: true }))
+  ]
+
   // Seeded on today (+ the rest of this week), not the reference spec's own
   // Saturday — the whole point of dev seed data is that it's what you see
   // when the app opens, not something you have to know to click forward to
@@ -282,8 +316,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Kurt'),
-        crewMemberId: idOf('Leonardo'),
+        assignments: crew('Kurt', 'Leonardo'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -305,8 +338,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 20,
-        pizzaioloId: idOf('Kurt'),
-        crewMemberId: idOf('Leonardo'),
+        assignments: crew('Kurt', 'Leonardo'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -325,8 +357,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 40,
-        pizzaioloId: idOf('Gabriel'),
-        crewMemberId: idOf('Matt'),
+        assignments: crew('Gabriel', 'Matt'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -345,8 +376,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('EJ'),
-        crewMemberId: idOf('John'),
+        assignments: crew('EJ', 'John'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -365,8 +395,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('EJ'),
-        crewMemberId: idOf('John'),
+        assignments: crew('EJ', 'John'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -391,8 +420,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Kurt'),
-        crewMemberId: idOf('Leonardo'),
+        assignments: crew('Kurt', 'Leonardo'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -411,8 +439,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Gabriel'),
-        crewMemberId: idOf('Matt'),
+        assignments: crew('Gabriel', 'Matt'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -434,8 +461,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('EJ'),
-        crewMemberId: idOf('John'),
+        assignments: crew('EJ', 'John'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -454,8 +480,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Nick'),
-        crewMemberId: idOf('Sam'),
+        assignments: crew('Nick', 'Sam'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -478,8 +503,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('EJ'),
-        crewMemberId: idOf('John'),
+        assignments: crew('EJ', 'John'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -498,8 +522,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('EJ'),
-        crewMemberId: idOf('John'),
+        assignments: crew('EJ', 'John'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -518,8 +541,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 20,
-        pizzaioloId: idOf('EJ'),
-        crewMemberId: idOf('John'),
+        assignments: crew('EJ', 'John'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -538,8 +560,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Kurt'),
-        crewMemberId: idOf('Leonardo'),
+        assignments: crew('Kurt', 'Leonardo'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -564,8 +585,7 @@ await database.delete(events)
         serviceDurationMinutes: 90,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Kurt'),
-        crewMemberId: idOf('Leonardo'),
+        assignments: crew('Kurt', 'Leonardo'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -584,8 +604,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 20,
-        pizzaioloId: idOf('Gabriel'),
-        crewMemberId: idOf('Matt'),
+        assignments: crew('Gabriel', 'Matt'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -604,8 +623,7 @@ await database.delete(events)
         serviceDurationMinutes: 90,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Sam'),
-        crewMemberId: idOf('Nick'),
+        assignments: crew('Sam', 'Nick'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -629,8 +647,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Gabriel'),
-        crewMemberId: idOf('Matt'),
+        assignments: crew('Gabriel', 'Matt'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -649,8 +666,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Gabriel'),
-        crewMemberId: idOf('Matt'),
+        assignments: crew('Gabriel', 'Matt'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -669,8 +685,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('EJ'),
-        crewMemberId: idOf('John'),
+        assignments: crew('EJ', 'John'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -693,8 +708,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Kurt'),
-        crewMemberId: idOf('Leonardo'),
+        assignments: crew('Kurt', 'Leonardo'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -713,8 +727,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Kurt'),
-        crewMemberId: idOf('Leonardo'),
+        assignments: crew('Kurt', 'Leonardo'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -733,8 +746,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Nick'),
-        crewMemberId: idOf('Sam'),
+        assignments: crew('Nick', 'Sam'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -757,8 +769,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Kurt'),
-        crewMemberId: idOf('Leonardo'),
+        assignments: crew('Kurt', 'Leonardo'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -777,8 +788,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Gabriel'),
-        crewMemberId: idOf('Matt'),
+        assignments: crew('Gabriel', 'Matt'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -797,8 +807,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('EJ'),
-        crewMemberId: idOf('John'),
+        assignments: crew('EJ', 'John'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -817,8 +826,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Nick'),
-        crewMemberId: idOf('Sam'),
+        assignments: crew('Nick', 'Sam'),
         fireDutyOverridePersonId: idOf('Matt'),
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -843,8 +851,7 @@ await database.delete(events)
         serviceDurationMinutes: 90,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Kurt'),
-        crewMemberId: idOf('Leonardo'),
+        assignments: crew('Kurt', 'Leonardo'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -863,8 +870,7 @@ await database.delete(events)
         serviceDurationMinutes: 240,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('Gabriel'),
-        crewMemberId: idOf('Matt'),
+        assignments: crew('Gabriel', 'Matt'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -883,8 +889,7 @@ await database.delete(events)
         serviceDurationMinutes: 120,
         setupMinutesOverride: null,
         rackCount: 0,
-        pizzaioloId: idOf('EJ'),
-        crewMemberId: idOf('John'),
+        assignments: crew('EJ', 'John'),
         fireDutyOverridePersonId: null,
         crewArrivalOverrideMinutes: null,
         truckId: null
@@ -896,8 +901,10 @@ await database.delete(events)
   const insertedEvents: EventRecord[] = []
 
   for (const { event, specialRequests } of referenceEvents) {
-    const [inserted] = await database.insert(events).values(event).returning({ id: events.id })
+    const { assignments, ...row } = event
+    const [inserted] = await database.insert(events).values(row).returning({ id: events.id })
     if (!inserted) throw new Error('[SEED] insert did not return an id')
+    await database.insert(eventAssignments).values(assignments.map((seat) => ({ ...seat, eventId: inserted.id })))
     if (specialRequests.length > 0) {
       await database
         .insert(eventSpecialRequests)
