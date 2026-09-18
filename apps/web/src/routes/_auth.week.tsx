@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { WeekBoard } from '@/components/week-board'
+import { WeekSummaryCard } from '@/components/work-summary'
 import { addDaysToKey, toDateKey } from '@/lib/format'
 import { useViewer } from '@/lib/use-viewer'
 
@@ -36,6 +37,17 @@ const Week = () => {
     queryFn: async () => {
       const response = await client.api.events.week[':startDate'].$get({ param: { startDate } })
       if (!response.ok) throw new Error('Failed to load the week')
+      return response.json()
+    }
+  })
+
+  // Names for the summary's rows. Same query key as the day page's, so moving
+  // between the two views doesn't fetch the roster twice.
+  const people = useQuery({
+    queryKey: ['people'],
+    queryFn: async () => {
+      const response = await client.api.people.$get()
+      if (!response.ok) throw new Error('Failed to load people')
       return response.json()
     }
   })
@@ -97,88 +109,94 @@ const Week = () => {
         showFreeRigs={isOwner}
       />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Night-before list</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {/* Columns share the width evenly and shrink with it — a scrollbar
+      <WeekSummaryCard days={week.data.map((day) => day.summary)} people={people.data ?? []} personal={!isOwner} />
+
+      {/* Ordering for the week, not anyone's schedule — so only the operator
+          sees it. A crew or pizzaiolo login gets their own days and times. */}
+      {isOwner ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Night-before list</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* Columns share the width evenly and shrink with it — a scrollbar
               under a week that already fits on screen was pure noise. */}
-          <div className="flex gap-1.5 sm:gap-2">
-            {week.data
-              .filter((day) => day.rigs.some((rig) => rig.events.length > 0))
-              .map((day) => (
-                <div key={day.date} className="min-w-0 flex-1 space-y-1.5 rounded-md border p-1.5 text-sm sm:p-2">
-                  <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground">
-                    {shortWeekdayOf(day.date)} {Number(day.date.split('-')[2])}
-                  </p>
-                  <div>
-                    <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Pizzas</p>
-                    <p className="font-mono text-base font-medium">{day.consumables.totalPizzas}</p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Cheese</p>
-                    <p className="font-mono text-base font-medium">{day.consumables.cheeseBags}</p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Sauce</p>
-                    <p className="font-mono text-base font-medium">{day.consumables.sauceUnits}</p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Trays</p>
-                    <p className="font-mono text-base font-medium">{day.consumables.trays}</p>
-                  </div>
-                  {day.consumables.glutenFreeDoughExtra > 0 ? (
+            <div className="flex gap-1.5 sm:gap-2">
+              {week.data
+                .filter((day) => day.rigs.some((rig) => rig.events.length > 0))
+                .map((day) => (
+                  <div key={day.date} className="min-w-0 flex-1 space-y-1.5 rounded-md border p-1.5 text-sm sm:p-2">
+                    <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground">
+                      {shortWeekdayOf(day.date)} {Number(day.date.split('-')[2])}
+                    </p>
                     <div>
-                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">GF extra</p>
-                      <p className="font-mono text-base font-medium">{day.consumables.glutenFreeDoughExtra}</p>
+                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Pizzas</p>
+                      <p className="font-mono text-base font-medium">{day.consumables.totalPizzas}</p>
                     </div>
-                  ) : null}
-                </div>
-              ))}
-          </div>
+                    <div>
+                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Cheese</p>
+                      <p className="font-mono text-base font-medium">{day.consumables.cheeseBags}</p>
+                    </div>
+                    <div>
+                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Sauce</p>
+                      <p className="font-mono text-base font-medium">{day.consumables.sauceUnits}</p>
+                    </div>
+                    <div>
+                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Trays</p>
+                      <p className="font-mono text-base font-medium">{day.consumables.trays}</p>
+                    </div>
+                    {day.consumables.glutenFreeDoughExtra > 0 ? (
+                      <div>
+                        <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">GF extra</p>
+                        <p className="font-mono text-base font-medium">{day.consumables.glutenFreeDoughExtra}</p>
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+            </div>
 
-          {/* The whole week in one column — what to order once rather than
+            {/* The whole week in one column — what to order once rather than
               seven daily numbers to add up by hand before a shop run. */}
-          {(() => {
-            const week_ = week.data.reduce(
-              (total, day) => ({
-                totalPizzas: total.totalPizzas + day.consumables.totalPizzas,
-                cheeseBags: total.cheeseBags + day.consumables.cheeseBags,
-                sauceUnits: total.sauceUnits + day.consumables.sauceUnits,
-                trays: total.trays + day.consumables.trays,
-                glutenFreeDoughExtra: total.glutenFreeDoughExtra + day.consumables.glutenFreeDoughExtra
-              }),
-              { totalPizzas: 0, cheeseBags: 0, sauceUnits: 0, trays: 0, glutenFreeDoughExtra: 0 }
-            )
-            if (week_.totalPizzas === 0) return null
+            {(() => {
+              const week_ = week.data.reduce(
+                (total, day) => ({
+                  totalPizzas: total.totalPizzas + day.consumables.totalPizzas,
+                  cheeseBags: total.cheeseBags + day.consumables.cheeseBags,
+                  sauceUnits: total.sauceUnits + day.consumables.sauceUnits,
+                  trays: total.trays + day.consumables.trays,
+                  glutenFreeDoughExtra: total.glutenFreeDoughExtra + day.consumables.glutenFreeDoughExtra
+                }),
+                { totalPizzas: 0, cheeseBags: 0, sauceUnits: 0, trays: 0, glutenFreeDoughExtra: 0 }
+              )
+              if (week_.totalPizzas === 0) return null
 
-            return (
-              <div className="mt-3 rounded-md border border-foreground/25 bg-muted/40 p-2">
-                <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground">Whole week</p>
-                <div className="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
-                  {(
-                    [
-                      ['Pizzas', week_.totalPizzas],
-                      ['Cheese bags', week_.cheeseBags],
-                      ['Sauce', week_.sauceUnits],
-                      ['Trays', week_.trays],
-                      ...(week_.glutenFreeDoughExtra > 0
-                        ? ([['GF dough extra', week_.glutenFreeDoughExtra]] as const)
-                        : [])
-                    ] as const
-                  ).map(([label, value]) => (
-                    <div key={label}>
-                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
-                      <p className="font-mono text-lg font-medium">{value}</p>
-                    </div>
-                  ))}
+              return (
+                <div className="mt-3 rounded-md border border-foreground/25 bg-muted/40 p-2">
+                  <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground">Whole week</p>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
+                    {(
+                      [
+                        ['Pizzas', week_.totalPizzas],
+                        ['Cheese bags', week_.cheeseBags],
+                        ['Sauce', week_.sauceUnits],
+                        ['Trays', week_.trays],
+                        ...(week_.glutenFreeDoughExtra > 0
+                          ? ([['GF dough extra', week_.glutenFreeDoughExtra]] as const)
+                          : [])
+                      ] as const
+                    ).map(([label, value]) => (
+                      <div key={label}>
+                        <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+                        <p className="font-mono text-lg font-medium">{value}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )
-          })()}
-        </CardContent>
-      </Card>
+              )
+            })()}
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   )
 }

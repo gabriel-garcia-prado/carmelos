@@ -90,10 +90,44 @@ export type OutsideFireDutyJson = Readonly<{
   truckId: string | null
 }>
 
+/** One person's day, added up — see `PersonShift` on the API side. */
+export type PersonShiftJson = Readonly<{
+  personId: string
+  minutes: number
+  parties: number
+  guests: number
+  pizzas: number
+  firstIn: string
+  lastOut: string
+}>
+
+export type DaySummaryJson = Readonly<{
+  parties: number
+  guests: number
+  pizzas: number
+  peopleWorking: number
+  crewMinutes: number
+  firstIn: string | null
+  lastOut: string | null
+  people: readonly PersonShiftJson[]
+}>
+
+export const EMPTY_SUMMARY: DaySummaryJson = {
+  parties: 0,
+  guests: 0,
+  pizzas: 0,
+  peopleWorking: 0,
+  crewMinutes: 0,
+  firstIn: null,
+  lastOut: null,
+  people: []
+}
+
 export type DayViewJson = Readonly<{
   date: string
   rigs: readonly RigDayJson[]
   fireDutyElsewhere: readonly OutsideFireDutyJson[]
+  summary: DaySummaryJson
 }>
 
 export type PersonLike = Readonly<{ id: string; name: string; minutesBeforeDepartureOverride: number | null }>
