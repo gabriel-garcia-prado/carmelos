@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test'
 import { okAsync } from 'neverthrow'
-import { formatClockTime } from '../../lib/time'
+import { diffMinutes, formatClockTime } from '../../lib/time'
 import type { Person } from '../people/people'
 import type { Settings } from '../settings/settings'
 import type { EventRecord, PreviewDependencies, WriteDependencies } from './events'
@@ -726,6 +726,131 @@ describe('rack timing', () => {
     expect(rackMinutesFor('slow', 'stick-a')).toBe(120)
     // Swapping only the stick leaves the rack exactly where it was.
     expect(rackMinutesFor('quick', 'stick-b')).toBe(30)
+  })
+})
+
+describe('summariseDay', () => {
+  const shiftOf = (day: ReturnType<typeof buildDayView>, personId: string) =>
+    day.summary.people.find((shift) => shift.personId === personId)
+  const rigOf = (day: ReturnType<typeof buildDayView>, rig: string) => day.rigs.find((view) => view.rig === rig)
+
+  test('someone riding out is on the clock until the truck is back at the shop', () => {
+    const day = buildDayView(
+      '2026-08-08',
+      [baseEvent({ id: 'p', rig: 'bus', firstPizzaTime: time(13), driveMinutesBackToShop: 20 })],
+      SETTINGS,
+      PEOPLE
+    )
+    const leo = shiftOf(day, 'leo')
+    const back = rigOf(day, 'bus')?.backAtShopTime as Date
+
+    expect(leo?.lastOut).toEqual(back)
+    expect(leo?.minutes).toBe(diffMinutes(back, leo?.firstIn as Date))
+  })
+
+  test('the wait between two parties on the same rig is still on the clock', () => {
+    // Leonardo works lunch and dinner on the Bus and never leaves the truck,
+    // so it's one stretch from first thing to back at the shop.
+    const day = buildDayView(
+      '2026-08-08',
+      [
+        baseEvent({ id: 'lunch', rig: 'bus', firstPizzaTime: time(13) }),
+        baseEvent({ id: 'dinner', rig: 'bus', firstPizzaTime: time(19), driveMinutesBackToShop: 20 })
+      ],
+      SETTINGS,
+      PEOPLE
+    )
+    const leo = shiftOf(day, 'leo')
+
+    expect(leo?.parties).toBe(2)
+    expect(leo?.minutes).toBe(diffMinutes(leo?.lastOut as Date, leo?.firstIn as Date))
+  })
+
+  test('the gap between two different rigs is not', () => {
+    // Leonardo sticks a lunchtime Small Caddy, then goes out on the evening
+    // Bus. The hours in between are his own.
+    const day = buildDayView(
+      '2026-08-08',
+      [
+        baseEvent({ id: 'morning', rig: 'small_caddy', firstPizzaTime: time(13), driveMinutesBackToShop: 20 }),
+        baseEvent({
+          id: 'evening',
+          rig: 'bus',
+          firstPizzaTime: time(19),
+          driveMinutesBackToShop: 20,
+          assignments: crew('gabriel', 'leo')
+        })
+      ],
+      SETTINGS,
+      PEOPLE
+    )
+    const leo = shiftOf(day, 'leo')
+    const span = diffMinutes(leo?.lastOut as Date, leo?.firstIn as Date)
+
+    expect(leo?.parties).toBe(2)
+    expect(leo?.minutes).toBeLessThan(span)
+  })
+
+  test('someone making their own way is counted from set-up to pack-down, not the drive home', () => {
+    const day = buildDayView(
+      '2026-08-08',
+      [
+        baseEvent({
+          id: 'p',
+          rig: 'bus',
+          firstPizzaTime: time(13),
+          driveMinutesBackToShop: 20,
+          assignments: crew('kurt', 'leo', 'matt')
+        })
+      ],
+      SETTINGS,
+      PEOPLE
+    )
+    const party = rigOf(day, 'bus')?.events[0]
+    const matt = shiftOf(day, 'matt')
+
+    expect(matt?.firstIn).toEqual(party?.computed.onSiteTime as Date)
+    expect(matt?.lastOut).toEqual(party?.computed.breakDownFinishTime as Date)
+  })
+
+  test('a party worked by three people is still one party', () => {
+    const day = buildDayView(
+      '2026-08-08',
+      [baseEvent({ id: 'p', rig: 'bus', headcount: 50, assignments: crew('kurt', 'leo', 'matt') })],
+      SETTINGS,
+      PEOPLE
+    )
+
+    expect(day.summary.parties).toBe(1)
+    expect(day.summary.guests).toBe(50)
+    expect(day.summary.pizzas).toBe(50 + SETTINGS.sparePizzasPerEvent)
+    expect(day.summary.peopleWorking).toBe(3)
+  })
+
+  test("a crew login is shown their own day and nobody else's hours", () => {
+    const day = buildDayView(
+      '2026-08-08',
+      [
+        baseEvent({ id: 'mine', rig: 'small_caddy', firstPizzaTime: time(13), headcount: 40 }),
+        baseEvent({
+          id: 'theirs',
+          rig: 'bus',
+          firstPizzaTime: time(13),
+          headcount: 90,
+          assignments: crew('gabriel', 'matt')
+        })
+      ],
+      SETTINGS,
+      PEOPLE
+    )
+    const scoped = scopeDayView(day, { role: 'crew', personId: 'leo' }, SETTINGS)
+
+    expect(scoped.summary.people.map((shift) => shift.personId)).toEqual(['leo'])
+    // The totals are Leonardo's, not the operation's — the Bus's 90 guests
+    // are none of his business.
+    expect(scoped.summary.parties).toBe(1)
+    expect(scoped.summary.guests).toBe(40)
+    expect(scoped.summary.peopleWorking).toBe(1)
   })
 })
 

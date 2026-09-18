@@ -8,7 +8,7 @@ import type { MessageEventContext } from '../../lib/messaging'
 import { composeEventMessage, composeFireDutyNote } from '../../lib/messaging'
 import type { ComputedEvent, EventForScheduling, TurnaroundStatus } from '../../lib/scheduling'
 import { computeRigDay } from '../../lib/scheduling'
-import { addDays, addMinutes, formatClockTime, toDateKey } from '../../lib/time'
+import { addDays, addMinutes, diffMinutes, formatClockTime, toDateKey } from '../../lib/time'
 import type { Viewer } from '../../lib/viewer'
 import { isOwner } from '../../lib/viewer'
 import type { Person } from '../people/people'
@@ -128,12 +128,44 @@ export type OutsideFireDuty = Readonly<{
   truckId: string | null
 }>
 
+/** One person's day, added up. */
+export type PersonShift = Readonly<{
+  personId: string
+  /**
+   * Time on the clock: from when they're due in to when they're done, per
+   * stretch of work, added across every rig they're on. The gap between two
+   * rigs isn't counted; the wait between two parties on the SAME rig is,
+   * because they stay with the truck.
+   */
+  minutes: number
+  parties: number
+  guests: number
+  /** What gets made at their parties: guests plus each party's spares. */
+  pizzas: number
+  firstIn: Date
+  lastOut: Date
+}>
+
+export type DaySummary = Readonly<{
+  parties: number
+  guests: number
+  pizzas: number
+  peopleWorking: number
+  /** Everyone's hours added together — the day's labour, not its length. */
+  crewMinutes: number
+  /** When the first person is due in and the last one is done. */
+  firstIn: Date | null
+  lastOut: Date | null
+  people: readonly PersonShift[]
+}>
+
 export type DayView = Readonly<{
   date: string
   rigs: readonly RigDayView[]
   consumables: ConsumablesSummary
   /** Always empty for the operator, who can see those rigs for themselves. */
   fireDutyElsewhere: readonly OutsideFireDuty[]
+  summary: DaySummary
 }>
 
 const resolveRackRate = (people: readonly Person[], personId: string | undefined, fallback: number): number =>
@@ -259,7 +291,13 @@ export const buildDayView = (
 
   const consumables = computeConsumables(consumablesInputFor(events), settings)
 
-  return { date, rigs: rigsWithFire, consumables, fireDutyElsewhere: [] }
+  return {
+    date,
+    rigs: rigsWithFire,
+    consumables,
+    fireDutyElsewhere: [],
+    summary: summariseDay(rigsWithFire, people, settings)
+  }
 }
 
 /**
@@ -281,7 +319,13 @@ export const scopeDayView = (view: DayView, viewer: Viewer, settings: Consumable
 
   const { personId } = viewer
   if (personId === null) {
-    return { ...view, rigs: [], consumables: computeConsumables([], settings), fireDutyElsewhere: [] }
+    return {
+      ...view,
+      rigs: [],
+      consumables: computeConsumables([], settings),
+      fireDutyElsewhere: [],
+      summary: summaryOf([], NO_PARTIES)
+    }
   }
 
   // Being sent to light another rig's fire is not a reason to see that rig's
@@ -329,8 +373,146 @@ export const scopeDayView = (view: DayView, viewer: Viewer, settings: Consumable
     ...view,
     rigs,
     consumables: computeConsumables(consumablesInputFor(rigs.flatMap((rigView) => rigView.events)), settings),
-    fireDutyElsewhere
+    fireDutyElsewhere,
+    // Their own row only, taken from the summary of the FULL day — the same
+    // reason the day is built whole before it's cut: their hours depend on
+    // parties they can't see. Everyone else's hours are pay-adjacent and none
+    // of their business, so the totals are rebuilt from this one row rather
+    // than carrying the whole operation's.
+    summary: (() => {
+      const own = view.summary.people.filter((shift) => shift.personId === personId)
+      const mine = own[0]
+      return summaryOf(own, mine ? { parties: mine.parties, guests: mine.guests, pizzas: mine.pizzas } : NO_PARTIES)
+    })()
   }
+}
+
+type PartyTotals = Pick<DaySummary, 'parties' | 'guests' | 'pizzas'>
+
+const NO_PARTIES: PartyTotals = { parties: 0, guests: 0, pizzas: 0 }
+
+/**
+ * A summary from a set of people's shifts. The party counts come in separately
+ * because they can't be derived from the rows: a party worked by three people
+ * appears on all three, so summing them triple-counts it.
+ */
+const summaryOf = (people: readonly PersonShift[], totals: PartyTotals): DaySummary => {
+  const earliest = people.map((shift) => shift.firstIn.getTime())
+  const latest = people.map((shift) => shift.lastOut.getTime())
+  return {
+    ...totals,
+    peopleWorking: people.length,
+    crewMinutes: people.reduce((sum, shift) => sum + shift.minutes, 0),
+    firstIn: earliest.length > 0 ? new Date(Math.min(...earliest)) : null,
+    lastOut: latest.length > 0 ? new Date(Math.max(...latest)) : null,
+    people
+  }
+}
+
+/**
+ * Hours, parties and pizzas for everyone working the day.
+ *
+ * A person's time is built in runs: consecutive parties they work on the same
+ * rig join into one, because they don't leave the truck in between — the
+ * spare time between two parties is still on the clock. A run starts when
+ * they're due in (the same rule as their texts, so the two can't disagree)
+ * and ends at pack-down, or back at the shop if they rode out with the truck
+ * and the run takes them to its last party. Someone who made their own way
+ * drives themselves home, and that isn't counted.
+ *
+ * Lighting another rig's fire counts too: it's why they came in early.
+ */
+export const summariseDay = (
+  rigs: readonly RigDayView[],
+  people: readonly Person[],
+  settings: Settings
+): DaySummary => {
+  type Run = { start: Date; end: Date; rodeOut: boolean }
+  type Tally = { runs: Run[]; parties: number; guests: number; pizzas: number }
+  const tallies = new Map<string, Tally>()
+  const tallyFor = (personId: string): Tally => {
+    const existing = tallies.get(personId)
+    if (existing) return existing
+    const created: Tally = { runs: [], parties: 0, guests: 0, pizzas: 0 }
+    tallies.set(personId, created)
+    return created
+  }
+
+  // Day-level counts are per party, never per person, or a party worked by
+  // three people would be counted three times.
+  let parties = 0
+  let guests = 0
+  let pizzas = 0
+
+  for (const rigView of rigs) {
+    const open = new Map<string, Run>()
+
+    for (const [index, eventView] of rigView.events.entries()) {
+      const previous = rigView.events[index - 1]
+      const fireDuty = eventView.computed.isFirstOfDay ? rigView.fireDuty : null
+      const partyPizzas = eventView.headcount + settings.sparePizzasPerEvent
+      parties += 1
+      guests += eventView.headcount
+      pizzas += partyPizzas
+
+      // Anyone whose run was open but isn't on this party left after the
+      // last one's pack-down.
+      const onThisParty = new Set(eventView.assignments.map((seat) => seat.personId))
+      for (const [personId, run] of open) {
+        if (onThisParty.has(personId)) continue
+        tallyFor(personId).runs.push(run)
+        open.delete(personId)
+      }
+
+      for (const assignment of eventView.assignments) {
+        const tally = tallyFor(assignment.personId)
+        tally.parties += 1
+        tally.guests += eventView.headcount
+        tally.pizzas += partyPizzas
+
+        const run = open.get(assignment.personId)
+        if (run) {
+          run.end = eventView.computed.breakDownFinishTime
+          continue
+        }
+        open.set(assignment.personId, {
+          start: arrivalTimeFor(eventView, previous, fireDuty, assignment, people, settings),
+          end: eventView.computed.breakDownFinishTime,
+          rodeOut: !arrivesOnSite(eventView, previous, assignment)
+        })
+      }
+    }
+
+    // Still open means they worked the rig's last party. On the truck, they
+    // ride it home and are done when it's back; in their own car, they're
+    // done at pack-down.
+    for (const [personId, run] of open) {
+      tallyFor(personId).runs.push(
+        run.rodeOut && rigView.backAtShopTime ? { ...run, end: rigView.backAtShopTime } : run
+      )
+    }
+  }
+
+  // A fire lit for another rig brings someone in before their own work starts.
+  for (const rigView of rigs) {
+    const fire = rigView.fireDuty
+    const tally = fire ? tallies.get(fire.litByPersonId) : undefined
+    if (!fire || !tally) continue
+    const first = [...tally.runs].sort((a, b) => a.start.getTime() - b.start.getTime())[0]
+    if (first && fire.litAt.getTime() < first.start.getTime()) first.start = fire.litAt
+  }
+
+  const shifts: PersonShift[] = [...tallies.entries()].map(([personId, tally]) => ({
+    personId,
+    minutes: tally.runs.reduce((sum, run) => sum + diffMinutes(run.end, run.start), 0),
+    parties: tally.parties,
+    guests: tally.guests,
+    pizzas: tally.pizzas,
+    firstIn: new Date(Math.min(...tally.runs.map((run) => run.start.getTime()))),
+    lastOut: new Date(Math.max(...tally.runs.map((run) => run.end.getTime())))
+  }))
+
+  return summaryOf(shifts, { parties, guests, pizzas })
 }
 
 /**

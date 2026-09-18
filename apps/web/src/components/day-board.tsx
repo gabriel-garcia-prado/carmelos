@@ -780,7 +780,7 @@ export const DayBoard = ({
                         // letting clicks through costs nothing and means a
                         // control added to a block later can't be swallowed by
                         // a label sitting on top of it.
-                        <div className="pointer-events-none relative z-20">
+                        <div className="pointer-events-none relative z-[18]">
                           {/* Name and duration share a line where they fit: the
                               duration used to cost a whole row of its own,
                               which on a short block meant showing "Drive" and
@@ -1012,11 +1012,20 @@ export const DayBoard = ({
                 {/* Rendered last so it paints in front of the blocks. The
                     radius has to be the blocks' own `rounded`, not something
                     tighter — a ring that curves harder than what it wraps
-                    leaves a sliver of card showing in each corner. */}
+                    leaves a sliver of card showing in each corner.
+
+                    Layering, bottom to top: current-time rule (10), the
+                    writing on the blocks (18), this frame (19), badges (20).
+                    Above the rule, or the warning reads as the clock's. Above
+                    the block labels too: each label sits on a pill of its
+                    block's colour with a soft halo, and where the frame's
+                    edge ran along a label that halo swallowed the yellow.
+                    Still under the badges, which often sit right on its edge
+                    and have to stay readable. */}
                 {hurryRings.map((ring) => (
                   <div
                     key={ring.key}
-                    className={`pointer-events-none absolute rounded ${ring.severity === 'bad' ? 'ring-[3px] ring-bad' : 'ring-[3px] ring-warn'}`}
+                    className={`pointer-events-none absolute z-[19] rounded ${ring.severity === 'bad' ? 'ring-[3px] ring-bad' : 'ring-[3px] ring-warn'}`}
                     style={{
                       left: isCollapsed ? BLOCK_INSET : TIME_GUTTER,
                       right: BLOCK_INSET,

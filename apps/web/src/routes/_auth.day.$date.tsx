@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { DaySummaryCard } from '@/components/work-summary'
 import type { ConsumablesJson } from '@/lib/day-blocks'
 import { arrivalIsoFor } from '@/lib/day-blocks'
 import { addDaysToKey, formatClockTime, formatDateLabel, toDateKey } from '@/lib/format'
@@ -386,58 +387,67 @@ const Day = () => {
         expandSoleRig={!isOwner}
       />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Day before list</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {isOwner && confirmations.isError ? (
-            <p className="text-sm text-destructive">Couldn't load confirmations — crew texts are hidden.</p>
-          ) : null}
+      {/* Under the board rather than above it: the board is what gets used,
+          and the summary is what you check it against. For a crew or
+          pizzaiolo login the server has already cut this to their own row. */}
+      <DaySummaryCard summary={view.summary} people={people.data} personal={!isOwner} />
 
-          {view.rigs
-            .filter((rig) => rig.events.length > 0)
-            .map((rig) => (
-              <RigGroup key={rig.rig} title={rig.label}>
-                {/* Whose text has gone out is the operator's business; the
+      {/* The day-before list is the operator's: it's where the crew's texts
+          are sent from, and the prep numbers beside them are an ordering job,
+          not anyone's schedule. A crew or pizzaiolo login is shown their own
+          day and the times in it, and this card is neither. */}
+      {isOwner ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Day before list</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {confirmations.isError ? (
+              <p className="text-sm text-destructive">Couldn't load confirmations — crew texts are hidden.</p>
+            ) : null}
+
+            {view.rigs
+              .filter((rig) => rig.events.length > 0)
+              .map((rig) => (
+                <RigGroup key={rig.rig} title={rig.label}>
+                  {/* Whose text has gone out is the operator's business; the
                     crew see the prep numbers for their own rig and nothing
                     about who else was contacted. */}
-                {isOwner ? (
-                  confirmations.isPending ? (
-                    <Skeleton className="mb-3 h-16 w-full" />
-                  ) : (
-                    <CrewRows
-                      groups={groupsByRig.find((entry) => entry.rig === rig.rig)?.groups ?? []}
-                      onSetStatus={(ids, status) => setStatus.mutate({ ids, status })}
-                      divider
-                    />
-                  )
-                ) : null}
-                <ConsumablesGrid consumables={rig.consumables} />
-              </RigGroup>
-            ))}
+                  {isOwner ? (
+                    confirmations.isPending ? (
+                      <Skeleton className="mb-3 h-16 w-full" />
+                    ) : (
+                      <CrewRows
+                        groups={groupsByRig.find((entry) => entry.rig === rig.rig)?.groups ?? []}
+                        onSetStatus={(ids, status) => setStatus.mutate({ ids, status })}
+                        divider
+                      />
+                    )
+                  ) : null}
+                  <ConsumablesGrid consumables={rig.consumables} />
+                </RigGroup>
+              ))}
 
-          {/* Anyone whose own rig couldn't be worked out (a fire-duty note
+            {/* Anyone whose own rig couldn't be worked out (a fire-duty note
               with no shift of their own) still needs their text sent, so
               they get a group rather than being quietly dropped. */}
-          {groupsByRig
-            .filter((entry) => !view.rigs.some((rig) => rig.rig === entry.rig && rig.events.length > 0))
-            .map((entry) => (
-              <RigGroup key={entry.rig} title={entry.groups[0]?.homeRigLabel ?? 'Other'}>
-                <CrewRows groups={entry.groups} onSetStatus={(ids, status) => setStatus.mutate({ ids, status })} />
-              </RigGroup>
-            ))}
+            {groupsByRig
+              .filter((entry) => !view.rigs.some((rig) => rig.rig === entry.rig && rig.events.length > 0))
+              .map((entry) => (
+                <RigGroup key={entry.rig} title={entry.groups[0]?.homeRigLabel ?? 'Other'}>
+                  <CrewRows groups={entry.groups} onSetStatus={(ids, status) => setStatus.mutate({ ids, status })} />
+                </RigGroup>
+              ))}
 
-          {/* The day-wide total is a second copy of the same numbers once the
+            {/* The day-wide total is a second copy of the same numbers once the
               view is scoped to one rig, and it reads as a claim about the
               whole operation that this person can't see. */}
-          {isOwner ? (
             <RigGroup title="All rigs" isTotal>
               <ConsumablesGrid consumables={view.consumables} />
             </RigGroup>
-          ) : null}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Sheet open={drawer !== null} onOpenChange={(open) => !open && setDrawer(null)}>
         <SheetContent
